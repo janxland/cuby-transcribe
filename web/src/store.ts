@@ -34,6 +34,8 @@ interface Store {
   setCurrentTime: (t: number) => void;
   /** 点击一条 stem：在 activeStems 里加入或移出；新加入的置于 front 成为主显 */
   toggleActiveStem: (stem: string) => void;
+  /** 编辑器写回：用新的 notes 列表替换某 stem 的 score.tracks[0].notes（保留其它字段） */
+  updateScoreNotes: (stem: string, notes: CubyScore["tracks"][number]["notes"]) => void;
   startUpload: () => Promise<void>;
   retranscribeWith: (stem: string) => Promise<void>;
   reset: () => void;
@@ -103,6 +105,22 @@ export const useStore = create<Store>((set, get) => ({
       score: primary ? scores[primary].score : null,
       meta: primary ? scores[primary].meta : null,
     });
+  },
+
+  updateScoreNotes: (stem, notes) => {
+    const { scores, activeStems } = get();
+    const entry = scores[stem];
+    if (!entry) return;
+    const tracks = entry.score.tracks;
+    const head = tracks[0] ?? { id: "track_1", name: "Melody", instrument: "sky_15", notes: [] };
+    const nextScore: CubyScore = {
+      ...entry.score,
+      tracks: [{ ...head, notes }, ...tracks.slice(1)],
+    };
+    const nextScores = { ...scores, [stem]: { score: nextScore, meta: entry.meta } };
+    const patch: Partial<Store> = { scores: nextScores };
+    if (activeStems[0] === stem) patch.score = nextScore;
+    set(patch as any);
   },
 
   reset: () => {

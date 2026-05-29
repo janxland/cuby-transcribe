@@ -4,10 +4,11 @@ import { stemMeta } from "../stems";
 import { PianoRoll } from "./PianoRoll";
 import { Sky15Keys } from "./Sky15Keys";
 import { StemsPanel } from "./StemsPanel";
+import { ScoreEditor } from "./editor";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { MixerProvider } from "./mixer";
 
-type Tab = "stems" | "sky" | "roll" | "json";
+type Tab = "stems" | "sky" | "edit" | "roll" | "json";
 
 export function ScoreViewer() {
   const { score, stems, scores, activeStems, toggleActiveStem } = useStore();
@@ -24,6 +25,7 @@ export function ScoreViewer() {
   const tabs: [Tab, string, number?][] = [
     ["stems", "音轨混音", stems.length],
     ["sky", "光遇 15 键"],
+    ["edit", "谱子编辑"],
     ["roll", "钢琴卷帘"],
     ["json", "JSON"],
   ];
@@ -99,6 +101,7 @@ export function ScoreViewer() {
       <div className="flex-1 min-h-0 overflow-auto">
         {tab === "stems" && <ErrorBoundary name="StemsPanel"><StemsPanel /></ErrorBoundary>}
         {tab === "sky" && (score ? <div className="p-3"><ErrorBoundary name="Sky15Keys"><Sky15Keys /></ErrorBoundary></div> : <Empty />)}
+        {tab === "edit" && (score ? <ErrorBoundary name="ScoreEditor"><ScoreEditor /></ErrorBoundary> : <Empty />)}
         {tab === "roll" && (score ? <div className="p-3"><ErrorBoundary name="PianoRoll"><PianoRoll /></ErrorBoundary></div> : <Empty />)}
         {tab === "json" && score && (
           <pre className="m-3 rounded-lg bg-slate-950 border border-slate-800 p-4 text-xs font-mono text-slate-300 whitespace-pre-wrap break-all">
