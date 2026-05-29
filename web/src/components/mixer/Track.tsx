@@ -3,7 +3,7 @@
  * 所有子模块通过 useMixer() 拿状态，无需 props 透传。
  */
 import { useEffect, useRef, useState } from "react";
-import { Download, RotateCw } from "lucide-react";
+import { Download, RotateCw, Eye, CheckCircle2 } from "lucide-react";
 import { useMixer } from "./useMixer";
 import { stemMeta } from "../../stems";
 import { gainToDb, fmt, pct, safeDur, waveColor } from "./utils";
@@ -12,18 +12,36 @@ import { getPeaks } from "./audio";
 interface Props {
   name: string;
   url: string;
-  /** 当前以此 stem 为扒谱目标，UI 高亮 */
+  /** 是否在「演奏列表」中（该谱正被 Sky15 弹奏） */
   active: boolean;
+  /** 是否为主显（activeStems[0]，PianoRoll/JSON 展示其内容） */
+  primary?: boolean;
+  /** 此 stem 已经生成过扒谱 */
+  hasScore?: boolean;
   /** 重扒按钮回调；为 undefined 则不显示该按钮 */
   onRetranscribe?: () => void;
+  /** 在「演奏列表」中 toggle（仅 hasScore 时有意义） */
+  onToggleScore?: () => void;
   /** 操作是否被禁用（任务进行中） */
   disabled?: boolean;
 }
 
-export function Track({ name, url, active, onRetranscribe, disabled }: Props) {
+export function Track({ name, url, active, primary, hasScore, onRetranscribe, onToggleScore, disabled }: Props) {
   return (
-    <div className={["flex items-stretch hover:bg-slate-900/40", active ? "bg-amber-400/5" : ""].join(" ")}>
-      <ChannelStrip name={name} active={active} onRetranscribe={onRetranscribe} disabled={!!disabled} url={url} />
+    <div className={[
+      "flex items-stretch hover:bg-slate-900/40",
+      primary ? "bg-amber-400/5" : active ? "bg-emerald-500/[0.04]" : hasScore ? "bg-slate-500/[0.03]" : "",
+    ].join(" ")}>
+      <ChannelStrip
+        name={name}
+        active={active}
+        primary={!!primary}
+        hasScore={!!hasScore}
+        onRetranscribe={onRetranscribe}
+        onToggleScore={onToggleScore}
+        disabled={!!disabled}
+        url={url}
+      />
       <Lane name={name} url={url} active={active} />
     </div>
   );
@@ -35,8 +53,12 @@ export function Track({ name, url, active, onRetranscribe, disabled }: Props) {
 const STRIP_WIDTH = 240;
 
 function ChannelStrip({
-  name, active, onRetranscribe, disabled, url,
-}: { name: string; active: boolean; onRetranscribe?: () => void; disabled: boolean; url: string }) {
+  name, active, primary, hasScore, onRetranscribe, onToggleScore, disabled, url,
+}: {
+  name: string; active: boolean; primary: boolean; hasScore: boolean;
+  onRetranscribe?: () => void; onToggleScore?: () => void;
+  disabled: boolean; url: string;
+}) {
   const m = useMixer();
   const meta = stemMeta(name);
   const st = m.trackStates[name] ?? { volume: 0.9, muted: false, solo: false };
@@ -59,8 +81,19 @@ function ChannelStrip({
         <div className="flex items-center gap-1.5 min-w-0">
           <span className="text-base leading-none">{meta.icon}</span>
           <span className="text-sm font-medium truncate flex-1" title={meta.label}>{meta.label}</span>
-          {active && (
-            <span className="text-[9px] px-1 py-0.5 rounded bg-amber-400 text-slate-900 font-bold leading-none">扒</span>
+          {primary && (
+            <span className="text-[9px] px-1 py-0.5 rounded bg-amber-400 text-slate-900 font-bold leading-none" title="主显：PianoRoll/JSON 正在展示该 stem 的扒谱">主</span>
+          )}
+          {active && !primary && (
+            <span className="text-[9px] px-1 py-0.5 rounded bg-emerald-400 text-slate-900 font-bold leading-none" title="正在被 Sky15 同时演奏">奏</span>
+          )}
+          {hasScore && !active && (
+            <span
+              className="text-[9px] px-1 py-0.5 rounded bg-emerald-500/40 text-emerald-100 border border-emerald-500/40 leading-none flex items-center gap-0.5"
+              title="已生成扒谱但未加入演奏列表"
+            >
+              <CheckCircle2 className="w-2.5 h-2.5" /> 已扒
+            </span>
           )}
           {/* 常驻操作按钮 */}
           <a
@@ -71,11 +104,23 @@ function ChannelStrip({
           >
             <Download className="w-3.5 h-3.5" />
           </a>
-          {!active && onRetranscribe && (
+          {onToggleScore && (
+            <button
+              onClick={onToggleScore}
+              title={active ? "从演奏列表移出本扒谱" : "加入演奏列表（Sky15 多谱同时弹奏）"}
+              className={[
+                "p-1 rounded hover:bg-slate-800",
+                active ? "text-amber-300 hover:text-amber-200" : "text-emerald-300 hover:text-emerald-200",
+              ].join(" ")}
+            >
+              <Eye className="w-3.5 h-3.5" />
+            </button>
+          )}
+          {onRetranscribe && (
             <button
               disabled={disabled}
               onClick={onRetranscribe}
-              title="用这条音轨重新扒谱"
+              title={hasScore ? "重新扒谱（不会覆盖其它 stem 的扒谱结果）" : "用这条音轨扒谱"}
               className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <RotateCw className="w-3.5 h-3.5" />

@@ -8,37 +8,49 @@
  */
 import { useEffect } from "react";
 import { Plus } from "lucide-react";
-import { MixerProvider, useMixer, type MixerTrackInput } from "./useMixer";
+import { useMixer, type MixerTrackInput } from "./useMixer";
 import { Transport } from "./Transport";
 import { Ruler } from "./Ruler";
 import { Track } from "./Track";
 
 export interface MixerPanelProps {
   tracks: MixerTrackInput[];
-  /** 当前扒谱目标 stem name */
-  activeTrack?: string;
+  /** 当前演奏列表中的 stem name（多选）；首位高亮为主显 */
+  activeTracks?: string[];
+  /** 已经生成过扒谱的 stem 名集合（用于显示「已扒」徽章） */
+  transcribedTracks?: string[];
   /** 重扒回调；不传则不显示重扒按钮 */
   onRetranscribe?: (stem: string) => void;
+  /** 点击某条已扒音轨的「谱」图标：在演奏列表中 toggle */
+  onToggleScore?: (stem: string) => void;
   /** 操作禁用（任务进行中） */
   disabled?: boolean;
   /** 顶部展示 BPM */
   bpm?: number;
+  /** 是否渲染顶部 Transport 条；嵌入到 Sky15 抽屉等已含 transport 的场景置 false */
+  withTransport?: boolean;
 }
 
+/**
+ * 注意：必须被外层 <MixerProvider> 包裹（在 ScoreViewer 中提升），
+ * 这样切到其它 Tab（Sky15 / Roll）时 mixer 状态不丢失。
+ */
 export function MixerPanel(props: MixerPanelProps) {
   if (!props.tracks.length) return null;
-  return (
-    <MixerProvider tracks={props.tracks}>
-      <Shell {...props} />
-    </MixerProvider>
-  );
+  return <Shell {...props} />;
 }
 
-function Shell({ tracks, activeTrack, onRetranscribe, disabled, bpm }: MixerPanelProps) {
+function Shell({
+  tracks, activeTracks, transcribedTracks, onRetranscribe, onToggleScore,
+  disabled, bpm, withTransport = true,
+}: MixerPanelProps) {
   useKeyboardShortcuts();
+  const scored = new Set(transcribedTracks ?? []);
+  const active = new Set(activeTracks ?? []);
+  const primary = activeTracks?.[0];
   return (
     <div className="h-full flex flex-col bg-slate-900/40 select-none overflow-hidden">
-      <Transport bpm={bpm} />
+      {withTransport && <Transport bpm={bpm} />}
       <Ruler />
       <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-slate-800">
         {tracks.map((t) => (
@@ -46,13 +58,16 @@ function Shell({ tracks, activeTrack, onRetranscribe, disabled, bpm }: MixerPane
             key={t.name}
             name={t.name}
             url={t.url}
-            active={activeTrack === t.name}
+            active={active.has(t.name)}
+            primary={primary === t.name}
+            hasScore={scored.has(t.name)}
             onRetranscribe={onRetranscribe ? () => onRetranscribe(t.name) : undefined}
+            onToggleScore={onToggleScore && scored.has(t.name) ? () => onToggleScore(t.name) : undefined}
             disabled={disabled}
           />
         ))}
       </div>
-      <Footer />
+      {withTransport && <Footer />}
     </div>
   );
 }

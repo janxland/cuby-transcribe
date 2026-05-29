@@ -33,7 +33,9 @@ def run(audio_path: str, options: ProcessOptions, task_id: str | None = None) ->
     stems: list[StemInfo] = []
 
     audio_for_transcribe = audio_path
-    transcribed_stem = "original"
+    # 「这次扒的是哪条 stem」由 options.transcribeStem 权威决定；
+    # 无分离 + 未指定 → 视为原曲。分离流程下若实际找到对应 stem 会再次确认。
+    transcribed_stem = options.transcribeStem or "original"
 
     # BPM 一定从 **原曲** 测，且与「分离」阶段后台并行 —— 节省最长一段串行时间
     bpm_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bpm")

@@ -7,8 +7,13 @@
 import { useStore } from "../store";
 import { MixerPanel } from "./mixer";
 
-export function StemsPanel() {
-  const { stems, meta, score, task, retranscribeWith } = useStore();
+interface Props {
+  /** 是否渲染顶部 Transport（在 Sky15 内嵌时由外层提供，置 false） */
+  withTransport?: boolean;
+}
+
+export function StemsPanel({ withTransport = true }: Props = {}) {
+  const { stems, score, scores, activeStems, task, retranscribeWith, toggleActiveStem } = useStore();
   if (!stems.length) {
     return (
       <div className="h-full flex items-center justify-center text-slate-500 text-sm">
@@ -18,13 +23,17 @@ export function StemsPanel() {
   }
   const busy = !!task && task.status !== "completed" && task.status !== "failed";
   const bpm = (score?.meta as any)?.bpm as number | undefined;
+  const transcribedStems = Object.keys(scores);
   return (
     <MixerPanel
       tracks={stems}
-      activeTrack={meta?.transcribedStem}
+      activeTracks={activeStems}
+      transcribedTracks={transcribedStems}
       bpm={bpm}
       disabled={busy}
+      withTransport={withTransport}
       onRetranscribe={(stem) => retranscribeWith(stem)}
+      onToggleScore={(stem) => toggleActiveStem(stem)}
     />
   );
 }

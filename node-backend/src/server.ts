@@ -88,10 +88,12 @@ app.post("/api/transcribe/:taskId/retranscribe", async (req, reply) => {
   // @ts-ignore
   await pipeline(r.body as any, ws);
 
+  // 直接喂这条 stem 的 wav，告知 Python 这次扒的就是这条 stem
+  // —— 不再二次分离，但保留 stem 身份用于 metadata.transcribedStem
   const newTask = createTask(saved, {
     ...task.options,
     separationMode: "none",
-    transcribeStem: "original",
+    transcribeStem: stem,
   });
   runTask(newTask).catch((e) => app.log.error(e));
   return { taskId: newTask.taskId, status: newTask.status };

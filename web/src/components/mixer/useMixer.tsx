@@ -232,3 +232,8 @@ export function useMixer(): MixerApi {
   if (!v) throw new Error("useMixer must be used inside <MixerProvider>");
   return v;
 }
+
+/** 容忍性版本：不在 Provider 内时返回 null（用于跨 Tab 的可选消费者） */
+export function useMixerOptional(): MixerApi | null {
+  return useContext(MixerCtx);
+}
