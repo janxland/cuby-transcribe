@@ -10,11 +10,23 @@ def transcribe(audio_path: str) -> Tuple[List[dict], float]:
     返回 (notes, bpm)。
     notes: [{pitch, start, end, velocity}, ...]
     """
-    from basic_pitch.inference import predict
-    from basic_pitch import ICASSP_2022_MODEL_PATH
+    from basic_pitch.inference import predict, Model
+    from basic_pitch import build_icassp_2022_model_path, FilenameSuffix
 
-    logger.info(f"[transcribe] start: {audio_path}")
-    model_output, midi_data, note_events = predict(audio_path, ICASSP_2022_MODEL_PATH)
+    # 优先 ONNX (跨平台稳定)，回退 CoreML / TFLite
+    model_path = None
+    for suffix in (FilenameSuffix.onnx, FilenameSuffix.coreml, FilenameSuffix.tflite):
+        try:
+            p = build_icassp_2022_model_path(suffix)
+            model_path = p
+            break
+        except Exception:
+            continue
+    if model_path is None:
+        from basic_pitch import ICASSP_2022_MODEL_PATH as model_path  # type: ignore
+
+    logger.info(f"[transcribe] start: {audio_path} (model={model_path})")
+    model_output, midi_data, note_events = predict(audio_path, Model(model_path))
 
     notes = []
     for start, end, pitch, velocity, _pitch_bends in note_events:
