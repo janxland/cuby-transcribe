@@ -1,0 +1,45 @@
+version: "3.9"
+
+services:
+  python-agent:
+    build: ./python-agent
+    container_name: cuby-python-agent
+    volumes:
+      - ./uploads:/app/uploads
+      - python-models:/root/.cache
+    expose:
+      - "8000"
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  node-backend:
+    build: ./node-backend
+    container_name: cuby-node-backend
+    environment:
+      - PORT=3000
+      - PYTHON_AGENT_URL=http://python-agent:8000
+      - UPLOAD_DIR=/app/uploads
+    volumes:
+      - ./uploads:/app/uploads
+    ports:
+      - "3000:3000"
+    depends_on:
+      - python-agent
+
+  web:
+    image: nginx:alpine
+    container_name: cuby-web
+    volumes:
+      - ./web:/usr/share/nginx/html:ro
+    ports:
+      - "8080:80"
+    depends_on:
+      - node-backend
+
+volumes:
+  python-models:
