@@ -32,10 +32,8 @@ services:
       - python-agent
 
   web:
-    image: nginx:alpine
+    build: ./web
     container_name: cuby-web
-    volumes:
-      - ./web:/usr/share/nginx/html:ro
     ports:
       - "8080:80"
     depends_on:

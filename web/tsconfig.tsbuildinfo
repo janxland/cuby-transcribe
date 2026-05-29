@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/store.ts","./src/types.ts","./src/components/audioplayer.tsx","./src/components/pianoroll.tsx","./src/components/progresscard.tsx","./src/components/scoreviewer.tsx","./src/components/sky15keys.tsx","./src/components/uploader.tsx"],"version":"5.9.3"}

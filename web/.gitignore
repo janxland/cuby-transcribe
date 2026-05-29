@@ -1,0 +1,5 @@
+# See https://help.github.com/articles/dealing-with-line-endings/
+node_modules
+dist
+.vite
+*.log

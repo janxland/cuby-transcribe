@@ -1,0 +1,14 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-50: #eef2ff;
+  --color-brand-500: #6366f1;
+  --color-brand-600: #4f46e5;
+}
+
+html, body, #root { height: 100%; }
+
+/* 自定义滚动条 */
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+*::-webkit-scrollbar-track { background: transparent; }

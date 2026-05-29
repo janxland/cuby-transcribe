@@ -1,0 +1,34 @@
+[
+  {
+    "audio_seconds": 5,
+    "elapsed_seconds": 2.93,
+    "rtf": 0.587,
+    "note_count": 10,
+    "detected_key": "A minor",
+    "bpm": 117.45
+  },
+  {
+    "audio_seconds": 10,
+    "elapsed_seconds": 0.53,
+    "rtf": 0.053,
+    "note_count": 19,
+    "detected_key": "C major",
+    "bpm": 117.45
+  },
+  {
+    "audio_seconds": 30,
+    "elapsed_seconds": 2.01,
+    "rtf": 0.067,
+    "note_count": 57,
+    "detected_key": "C major",
+    "bpm": 117.45
+  },
+  {
+    "audio_seconds": 60,
+    "elapsed_seconds": 2.14,
+    "rtf": 0.036,
+    "note_count": 112,
+    "detected_key": "C major",
+    "bpm": 117.45
+  }
+]
