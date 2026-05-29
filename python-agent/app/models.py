@@ -2,8 +2,10 @@ from pydantic import BaseModel, Field
 from typing import List, Literal, Optional
 
 
-SeparationMode = Literal["none", "vocals", "4stems"]
-TranscribeStem = Literal["original", "vocals", "no_vocals", "drums", "bass", "other"]
+SeparationMode = Literal["none", "vocals", "4stems", "6stems"]
+TranscribeStem = Literal[
+    "original", "vocals", "no_vocals", "drums", "bass", "other", "piano", "guitar",
+]
 
 
 class ProcessOptions(BaseModel):
@@ -15,6 +17,8 @@ class ProcessOptions(BaseModel):
     separationMode: SeparationMode = "none"
     # 要扒哪条音轨；为 None 时根据 separationMode 自动决定
     transcribeStem: Optional[TranscribeStem] = None
+    # 用户实际想要保留的 stems 名单；为 None 时保留全部 demucs 输出
+    stems: Optional[List[str]] = None
 
 
 class ProcessRequest(BaseModel):

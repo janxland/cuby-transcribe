@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, Future
+from typing import Optional
 from loguru import logger
 
 from ..models import CubyScore, Meta, Track, Note, Metadata, ProcessOptions, StemInfo
@@ -33,10 +35,21 @@ def run(audio_path: str, options: ProcessOptions, task_id: str | None = None) ->
     audio_for_transcribe = audio_path
     transcribed_stem = "original"
 
+    # BPM 一定从 **原曲** 测，且与「分离」阶段后台并行 —— 节省最长一段串行时间
+    bpm_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bpm")
+    bpm_future: Future = bpm_pool.submit(transcriber.detect_bpm, audio_path)
+    bpm_pool.shutdown(wait=False)
+
     if options.separationMode != "none":
         from . import separator
-        logger.info(f"[stage] separation mode={options.separationMode}")
-        stem_paths = separator.separate(audio_path, stems_dir, mode=options.separationMode)
+        logger.info(f"[stage] separation mode={options.separationMode} stems={options.stems} (BPM running in parallel)")
+        # 若用户指定了 transcribeStem，确保它一定被保留
+        keep = list(options.stems) if options.stems else None
+        if keep and options.transcribeStem and options.transcribeStem not in keep:
+            keep.append(options.transcribeStem)
+        stem_paths = separator.separate(
+            audio_path, stems_dir, mode=options.separationMode, keep_stems=keep,
+        )
         for name, path in stem_paths.items():
             stems.append(StemInfo(
                 name=name,
@@ -54,8 +67,15 @@ def run(audio_path: str, options: ProcessOptions, task_id: str | None = None) ->
             logger.warning(f"requested stem '{want}' not found, fall back to original")
             audio_for_transcribe = audio_path
 
-    logger.info(f"[stage] transcribe ({transcribed_stem})")
-    raw_notes, bpm = transcriber.transcribe(audio_for_transcribe)
+    # 等 BPM 拿回来（多数情况此时已 done）
+    try:
+        precomputed_bpm: Optional[float] = bpm_future.result(timeout=30)
+    except Exception as e:
+        logger.warning(f"[bpm] future failed: {e}")
+        precomputed_bpm = None
+
+    logger.info(f"[stage] transcribe ({transcribed_stem}) bpm={precomputed_bpm}")
+    raw_notes, bpm = transcriber.transcribe(audio_for_transcribe, bpm=precomputed_bpm)
     if not raw_notes:
         raise RuntimeError("No notes detected from audio")
 

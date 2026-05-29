@@ -1,14 +1,15 @@
-import { useRef, useState } from "react";
-import { Upload, Music, X, Sparkles } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { Upload, Music, X, Sparkles, CheckSquare, Square } from "lucide-react";
 import { useStore } from "../store";
-import type { SeparationMode } from "../types";
-import { STEMS_BY_MODE, STEM_REGISTRY } from "../stems";
+import { STEM_REGISTRY, SELECTABLE_STEMS, deriveMode, type StemName } from "../stems";
 
-const SEP_OPTIONS: { value: SeparationMode; label: string; desc: string }[] = [
-  { value: "none", label: "不分离", desc: "最快 · 直接整段扒谱" },
-  { value: "vocals", label: "人声 / 伴奏", desc: "Demucs 2 轨 · 推荐" },
-  { value: "4stems", label: "4 轨分离", desc: "人声 / 鼓 / 贝斯 / 其它" },
-];
+// 模式说明（根据已选 stems 自动派生展示，仅作"成本预估"提示）
+const MODE_HINTS: Record<string, string> = {
+  none:     "不分离 · 最快 · 直接整段扒谱",
+  vocals:   "Demucs 2 轨 · 仅人声/伴奏 · 最快",
+  "4stems": "Demucs htdemucs · 4 轨 · 约 1× 时长",
+  "6stems": "Demucs htdemucs_6s · 6 轨含钢琴/吉他 · 约 1.5× 时长",
+};
 
 export function Uploader() {
   const { file, options, setFile, setOptions, startUpload, task } = useStore();
@@ -16,8 +17,30 @@ export function Uploader() {
   const [dragging, setDragging] = useState(false);
   const busy = task && task.status !== "completed" && task.status !== "failed";
 
-  const stemOpts = STEMS_BY_MODE[options.separationMode];
-  const currentStem = options.transcribeStem ?? stemOpts[0];
+  const chosen = options.stems;
+  const mode = useMemo(() => deriveMode(chosen), [chosen]);
+
+  const toggleStem = (s: StemName) => {
+    const next = chosen.includes(s) ? chosen.filter((x) => x !== s) : [...chosen, s];
+    setOptions({
+      stems: next,
+      separationMode: deriveMode(next),
+      // 若移除了原扒谱目标，自动改为首个；空则清空
+      transcribeStem: options.transcribeStem && next.includes(options.transcribeStem)
+        ? options.transcribeStem
+        : next[0],
+    });
+  };
+  const setAll = (all: boolean) => {
+    const next: StemName[] = all ? [...SELECTABLE_STEMS] : [];
+    setOptions({
+      stems: next,
+      separationMode: deriveMode(next),
+      transcribeStem: next[0],
+    });
+  };
+
+  const currentStem = options.transcribeStem ?? chosen[0];
 
   return (
     <div className="space-y-5">
@@ -70,51 +93,57 @@ export function Uploader() {
         )}
       </div>
 
-      {/* 分离模式 */}
+      {/* 音轨多选 */}
       <div>
-        <div className="flex items-center gap-1.5 text-xs text-slate-400 mb-2">
+        <div className="flex items-center gap-2 text-xs text-slate-400 mb-2">
           <Sparkles className="w-3.5 h-3.5" />
-          <span>音轨分离 (Demucs)</span>
+          <span>分离音轨（可多选）</span>
+          <button
+            type="button"
+            onClick={() => setAll(chosen.length !== SELECTABLE_STEMS.length)}
+            className="ml-auto flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-slate-700 hover:border-slate-500 text-slate-300"
+          >
+            {chosen.length === SELECTABLE_STEMS.length
+              ? <><CheckSquare className="w-3 h-3" /> 取消全选</>
+              : <><Square className="w-3 h-3" /> 全选</>}
+          </button>
         </div>
-        <div className="space-y-1.5">
-          {SEP_OPTIONS.map((o) => (
-            <label
-              key={o.value}
-              className={[
-                "flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition text-sm",
-                options.separationMode === o.value
-                  ? "border-indigo-500 bg-indigo-500/10"
-                  : "border-slate-800 hover:border-slate-700",
-              ].join(" ")}
-            >
-              <input
-                type="radio"
-                name="sep"
-                value={o.value}
-                checked={options.separationMode === o.value}
-                onChange={() => setOptions({
-                  separationMode: o.value,
-                  transcribeStem: STEMS_BY_MODE[o.value][0],
-                })}
-                className="accent-indigo-500"
-              />
-              <span className="flex-1">{o.label}</span>
-              <span className="text-[11px] text-slate-500">{o.desc}</span>
-            </label>
-          ))}
+        <div className="grid grid-cols-3 gap-1.5">
+          {SELECTABLE_STEMS.map((name) => {
+            const m = STEM_REGISTRY[name];
+            const on = chosen.includes(name);
+            return (
+              <button
+                key={name}
+                type="button"
+                onClick={() => toggleStem(name)}
+                className={[
+                  "py-2 px-2 text-sm rounded-lg border transition flex items-center justify-center gap-1.5",
+                  on
+                    ? "border-indigo-500 bg-indigo-500/10 text-indigo-100"
+                    : "border-slate-800 hover:border-slate-700 text-slate-300",
+                ].join(" ")}
+              >
+                <span className="text-base leading-none">{m.icon}</span>
+                <span>{m.label}</span>
+              </button>
+            );
+          })}
         </div>
+        <div className="mt-1.5 text-[11px] text-slate-500">{MODE_HINTS[mode]}</div>
       </div>
 
-      {/* 选哪条转录 */}
-      {options.separationMode !== "none" && (
+      {/* 扒谱目标 */}
+      {chosen.length > 0 && (
         <div>
-          <div className="text-xs text-slate-400 mb-2">扒谱目标</div>
-          <div className="grid grid-cols-2 gap-1.5">
-            {stemOpts.map((name) => {
+          <div className="text-xs text-slate-400 mb-2">扒谱目标（从已选音轨中选）</div>
+          <div className="grid grid-cols-3 gap-1.5">
+            {chosen.map((name) => {
               const m = STEM_REGISTRY[name];
               return (
                 <button
                   key={name}
+                  type="button"
                   onClick={() => setOptions({ transcribeStem: name })}
                   className={[
                     "py-1.5 px-3 text-sm rounded-lg border transition",
@@ -131,7 +160,7 @@ export function Uploader() {
         </div>
       )}
 
-      {/* 高级选项 */}
+      {/* 音乐处理 */}
       <div>
         <div className="text-xs text-slate-400 mb-2">音乐处理</div>
         <div className="grid grid-cols-3 gap-3 text-sm">
@@ -172,7 +201,7 @@ export function Uploader() {
         onClick={() => startUpload()}
         className="w-full py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:text-slate-500 font-medium transition"
       >
-        {busy ? "处理中…" : options.separationMode === "none" ? "开始扒谱" : "分离 + 扒谱"}
+        {busy ? "处理中…" : mode === "none" ? "直接扒谱（不分离）" : `分离 ${chosen.length} 轨 + 扒谱`}
       </button>
     </div>
   );

@@ -8,20 +8,20 @@ interface Store {
   options: UploadOptions;
 
   task: TaskState | null;
-  parentTaskId: string | null;   // 首个任务（含 stems）
+  parentTaskId: string | null;     // 含 stems 的首个任务，retranscribe 用
   score: CubyScore | null;
   meta: Metadata | null;
   stems: StemInfo[];
 
-  isPlaying: boolean;
+  /** 原音预听条上报，PianoRoll / Sky15 用作 playhead */
   currentTime: number;
 
   setFile: (f: File | null) => void;
   setOptions: (o: Partial<UploadOptions>) => void;
+  setCurrentTime: (t: number) => void;
   startUpload: () => Promise<void>;
   retranscribeWith: (stem: string) => Promise<void>;
   reset: () => void;
-  setPlayback: (p: { isPlaying?: boolean; currentTime?: number }) => void;
 }
 
 const DEFAULT_OPTIONS: UploadOptions = {
@@ -29,44 +29,35 @@ const DEFAULT_OPTIONS: UploadOptions = {
   simplifyMelody: true,
   quantizeGrid: 16,
   separationMode: "none",
+  stems: [],
 };
+
+// 切换/清除文件时的统一重置
+const blank = () => ({
+  task: null, parentTaskId: null,
+  score: null, meta: null, stems: [],
+  currentTime: 0,
+});
 
 export const useStore = create<Store>((set, get) => ({
   file: null,
   audioUrl: null,
   options: DEFAULT_OPTIONS,
-  task: null,
-  parentTaskId: null,
-  score: null,
-  meta: null,
-  stems: [],
-  isPlaying: false,
-  currentTime: 0,
+  ...blank(),
 
   setFile: (f) => {
     const prev = get().audioUrl;
     if (prev) URL.revokeObjectURL(prev);
-    set({
-      file: f,
-      audioUrl: f ? URL.createObjectURL(f) : null,
-      task: null, parentTaskId: null,
-      score: null, meta: null, stems: [],
-      isPlaying: false, currentTime: 0,
-    });
+    set({ file: f, audioUrl: f ? URL.createObjectURL(f) : null, ...blank() });
   },
 
   setOptions: (o) => set({ options: { ...get().options, ...o } }),
-  setPlayback: (p) => set((s) => ({ ...s, ...p })),
+  setCurrentTime: (t) => set({ currentTime: t }),
 
   reset: () => {
     const prev = get().audioUrl;
     if (prev) URL.revokeObjectURL(prev);
-    set({
-      file: null, audioUrl: null,
-      task: null, parentTaskId: null,
-      score: null, meta: null, stems: [],
-      isPlaying: false, currentTime: 0,
-    });
+    set({ file: null, audioUrl: null, ...blank() });
   },
 
   startUpload: async () => {
@@ -90,11 +81,7 @@ export const useStore = create<Store>((set, get) => ({
     await pollUntilDone(taskId, (s) => {
       set({ task: s });
       if (s.status === "completed") {
-        set({
-          score: s.result ?? null,
-          meta: s.metadata ?? null,
-          stems: s.stems ?? [],
-        });
+        set({ score: s.result ?? null, meta: s.metadata ?? null, stems: s.stems ?? [] });
       }
     });
   },
@@ -110,9 +97,7 @@ export const useStore = create<Store>((set, get) => ({
       const r = await retranscribeStem(parent, stem);
       await pollUntilDone(r.taskId, (s) => {
         set({ task: s });
-        if (s.status === "completed") {
-          set({ score: s.result ?? null, meta: s.metadata ?? null });
-        }
+        if (s.status === "completed") set({ score: s.result ?? null, meta: s.metadata ?? null });
       });
     } catch (e: any) {
       set({ task: { taskId: "", status: "failed", progress: 0, message: "failed", error: e.message } });

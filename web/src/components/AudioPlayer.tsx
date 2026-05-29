@@ -1,27 +1,23 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Play, Pause, Download } from "lucide-react";
 import { useStore } from "../store";
 
+/**
+ * 顶部"原音预听"条：仅播放用户上传的原始文件，跟 Mixer 引擎相互独立。
+ * 同时把 currentTime 同步到 store 供 PianoRoll / Sky15 显示播放头。
+ */
 export function AudioPlayer() {
-  const { audioUrl, isPlaying, setPlayback, score, file } = useStore();
+  const { audioUrl, score, file, setCurrentTime } = useStore();
   const audioRef = useRef<HTMLAudioElement>(null);
-  const rafRef = useRef<number | null>(null);
+  const [playing, setPlaying] = useState(false);
 
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
-    const tick = () => {
-      setPlayback({ currentTime: a.currentTime });
-      rafRef.current = requestAnimationFrame(tick);
-    };
-    const onPlay = () => {
-      setPlayback({ isPlaying: true });
-      rafRef.current = requestAnimationFrame(tick);
-    };
-    const onPause = () => {
-      setPlayback({ isPlaying: false });
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    };
+    let raf = 0;
+    const tick = () => { setCurrentTime(a.currentTime); raf = requestAnimationFrame(tick); };
+    const onPlay  = () => { setPlaying(true);  raf = requestAnimationFrame(tick); };
+    const onPause = () => { setPlaying(false); cancelAnimationFrame(raf); };
     a.addEventListener("play", onPlay);
     a.addEventListener("pause", onPause);
     a.addEventListener("ended", onPause);
@@ -29,17 +25,18 @@ export function AudioPlayer() {
       a.removeEventListener("play", onPlay);
       a.removeEventListener("pause", onPause);
       a.removeEventListener("ended", onPause);
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      cancelAnimationFrame(raf);
     };
-  }, [audioUrl, setPlayback]);
+  }, [audioUrl, setCurrentTime]);
+
+  if (!audioUrl) return null;
 
   const toggle = () => {
-    const a = audioRef.current;
-    if (!a) return;
+    const a = audioRef.current; if (!a) return;
     if (a.paused) a.play(); else a.pause();
   };
 
-  const download = () => {
+  const downloadScore = () => {
     if (!score) return;
     const name = (score.meta?.title || file?.name || "score") + ".cuby.json";
     const blob = new Blob([JSON.stringify(score, null, 2)], { type: "application/json" });
@@ -50,23 +47,23 @@ export function AudioPlayer() {
     URL.revokeObjectURL(a.href);
   };
 
-  if (!audioUrl) return null;
-
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3 flex items-center gap-3">
+    <div className="px-3 py-2 flex items-center gap-3">
       <button
         onClick={toggle}
-        className="w-10 h-10 rounded-full bg-indigo-600 hover:bg-indigo-500 flex items-center justify-center"
+        className="w-8 h-8 rounded-full bg-indigo-600 hover:bg-indigo-500 flex items-center justify-center shrink-0"
+        title="原音预听"
       >
-        {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
+        {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
       </button>
-      <audio ref={audioRef} src={audioUrl} controls className="flex-1" />
+      <div className="text-[10px] text-slate-500 uppercase tracking-wider shrink-0">原音预听</div>
+      <audio ref={audioRef} src={audioUrl} controls className="flex-1 h-8" />
       {score && (
         <button
-          onClick={download}
-          className="px-3 py-2 text-sm rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center gap-1.5"
+          onClick={downloadScore}
+          className="px-2.5 py-1.5 text-xs rounded-md bg-slate-800 hover:bg-slate-700 flex items-center gap-1.5 shrink-0"
         >
-          <Download className="w-4 h-4" /> JSON
+          <Download className="w-3.5 h-3.5" /> JSON
         </button>
       )}
     </div>

@@ -40,7 +40,7 @@ export interface Metadata {
 
 export type TaskStatus = "queued" | "processing" | "completed" | "failed";
 
-export type SeparationMode = "none" | "vocals" | "4stems";
+export type SeparationMode = "none" | "vocals" | "4stems" | "6stems";
 
 export interface StemInfo {
   name: string;
@@ -63,6 +63,10 @@ export interface UploadOptions {
   transposeToC: boolean;
   simplifyMelody: boolean;
   quantizeGrid: 8 | 16;
+  /** 由 stems 自动派生，提交给 backend 决定 demucs 模型 */
   separationMode: SeparationMode;
+  /** 用户希望保留/试听的音轨集合（多选） */
+  stems: StemName[];
+  /** 指定要扒谱的目标 stem；缺省时取 stems[0] */
   transcribeStem?: StemName;
 }
