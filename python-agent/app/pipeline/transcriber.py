@@ -26,7 +26,7 @@ def transcribe(audio_path: str) -> Tuple[List[dict], float]:
         from basic_pitch import ICASSP_2022_MODEL_PATH as model_path  # type: ignore
 
     logger.info(f"[transcribe] start: {audio_path} (model={model_path})")
-    model_output, midi_data, note_events = predict(audio_path, Model(model_path))
+    _model_output, _midi_data, note_events = predict(audio_path, Model(model_path))
 
     notes = []
     for start, end, pitch, velocity, _pitch_bends in note_events:

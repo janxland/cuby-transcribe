@@ -1,14 +1,18 @@
-export type TaskStatus =
-  | "queued"
-  | "processing"
-  | "completed"
-  | "failed";
+export type TaskStatus = "queued" | "processing" | "completed" | "failed";
 
 export interface TaskOptions {
-  target?: "vocal" | "instrument" | "auto";
   transposeToC?: boolean;
   quantizeGrid?: 8 | 16;
   simplifyMelody?: boolean;
+  separationMode?: "none" | "vocals" | "4stems";
+  transcribeStem?:
+    | "original" | "vocals" | "no_vocals" | "drums" | "bass" | "other";
+}
+
+export interface StemInfo {
+  name: string;
+  url: string;       // 对外 URL: /api/stems/:taskId/:name.wav
+  duration: number;
 }
 
 export interface Task {
@@ -18,16 +22,18 @@ export interface Task {
   message: string;
   audioPath: string;
   options: TaskOptions;
-  createdAt: number;
   result?: any;
   metadata?: any;
+  stems?: StemInfo[];
+  agentTaskId?: string;  // Python 端的 taskId (用于 stems URL)
   error?: string;
 }
 
 const tasks = new Map<string, Task>();
 
 export function createTask(audioPath: string, options: TaskOptions): Task {
-  const taskId = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  const taskId =
+    Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
   const task: Task = {
     taskId,
     status: "queued",
@@ -35,7 +41,6 @@ export function createTask(audioPath: string, options: TaskOptions): Task {
     message: "queued",
     audioPath,
     options,
-    createdAt: Date.now(),
   };
   tasks.set(taskId, task);
   return task;

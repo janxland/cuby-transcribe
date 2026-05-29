@@ -8,6 +8,11 @@ dist/
 __pycache__/
 *.pyc
 .venv/
+
+# 产物
+benchmarks/results.json
+/tmp/
+*.tsbuildinfo
 venv/
 *.egg-info/
 .pytest_cache/

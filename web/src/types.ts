@@ -1,8 +1,11 @@
+// StemName 与 STEM_REGISTRY 同源派生，避免重复枚举
+import type { StemName } from "./stems";
+
 export interface Note {
-  pitch: number;       // MIDI 60-84
-  time: number;        // seconds
-  duration: number;    // seconds
-  velocity: number;    // 0-127
+  pitch: number;
+  time: number;
+  duration: number;
+  velocity: number;
 }
 
 export interface Track {
@@ -32,9 +35,18 @@ export interface Metadata {
   duration: number;
   noteCount: number;
   elapsed: number;
+  transcribedStem: string;
 }
 
 export type TaskStatus = "queued" | "processing" | "completed" | "failed";
+
+export type SeparationMode = "none" | "vocals" | "4stems";
+
+export interface StemInfo {
+  name: string;
+  url: string;
+  duration: number;
+}
 
 export interface TaskState {
   taskId: string;
@@ -43,6 +55,7 @@ export interface TaskState {
   message: string;
   result?: CubyScore;
   metadata?: Metadata;
+  stems?: StemInfo[];
   error?: string;
 }
 
@@ -50,4 +63,6 @@ export interface UploadOptions {
   transposeToC: boolean;
   simplifyMelody: boolean;
   quantizeGrid: 8 | 16;
+  separationMode: SeparationMode;
+  transcribeStem?: StemName;
 }

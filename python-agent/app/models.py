@@ -2,22 +2,31 @@ from pydantic import BaseModel, Field
 from typing import List, Literal, Optional
 
 
+SeparationMode = Literal["none", "vocals", "4stems"]
+TranscribeStem = Literal["original", "vocals", "no_vocals", "drums", "bass", "other"]
+
+
 class ProcessOptions(BaseModel):
-    target: Literal["vocal", "instrument", "auto"] = "auto"
     transposeToC: bool = True
     quantizeGrid: Literal[8, 16] = 16
     simplifyMelody: bool = True
+
+    # 音轨分离（Demucs）
+    separationMode: SeparationMode = "none"
+    # 要扒哪条音轨；为 None 时根据 separationMode 自动决定
+    transcribeStem: Optional[TranscribeStem] = None
 
 
 class ProcessRequest(BaseModel):
     audioPath: str
     options: ProcessOptions = Field(default_factory=ProcessOptions)
+    taskId: Optional[str] = None
 
 
 class Note(BaseModel):
-    pitch: int          # MIDI pitch
-    time: float         # seconds
-    duration: float     # seconds
+    pitch: int
+    time: float
+    duration: float
     velocity: int = 90
 
 
@@ -43,6 +52,12 @@ class CubyScore(BaseModel):
     tracks: List[Track]
 
 
+class StemInfo(BaseModel):
+    name: str
+    url: str
+    duration: float
+
+
 class Metadata(BaseModel):
     detectedKey: str
     detectedMode: str
@@ -50,10 +65,13 @@ class Metadata(BaseModel):
     duration: float
     noteCount: int
     elapsed: float
+    transcribedStem: str
 
 
 class ProcessResponse(BaseModel):
     success: bool
     cubyScore: Optional[CubyScore] = None
     metadata: Optional[Metadata] = None
+    stems: List[StemInfo] = Field(default_factory=list)
+    taskId: Optional[str] = None
     error: Optional[str] = None

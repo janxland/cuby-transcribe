@@ -9,3 +9,10 @@ numpy<2
 pretty_midi==0.2.10
 loguru==0.7.2
 httpx==0.27.2
+
+# 音轨分离（Demucs / PyTorch）
+demucs>=4.0.1
+torch>=2.1
+torchaudio>=2.1
+diffq>=0.2.4
+
