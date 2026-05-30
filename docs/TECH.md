@@ -92,14 +92,16 @@ sequenceDiagram
 ### 4.1 模块树
 ```
 python-agent/app/
-├─ main.py              # FastAPI 路由
-├─ models.py            # Pydantic 契约
+├─ main.py                  # FastAPI 路由
+├─ models.py                # Pydantic 契约
 └─ pipeline/
-   ├─ processor.py      # 总调度
-   ├─ separator.py      # Demucs 封装 + 重试
-   ├─ transcriber.py    # Basic Pitch 封装
-   ├─ key_detector.py   # Krumhansl-Schmuckler 调性检测
-   └─ sky_mapper.py     # 15 键映射 + 量化
+   ├─ processor.py          # 总调度
+   ├─ separator.py          # Demucs 封装 + 重试
+   ├─ transcriber.py        # Basic Pitch（复音）封装
+   ├─ melody_extractor.py   # PYIN 单音旋律提取（人声主旋律首选）
+   ├─ key_detector.py       # Krumhansl-Schmuckler 调性检测
+   ├─ key_optimizer.py      # 最佳可弹奏调搜索（输出推荐升降调键）
+   └─ sky_mapper.py         # 15 键映射 + 量化
 ```
 
 ### 4.2 关键阶段（[processor.py](../python-agent/app/pipeline/processor.py)）
@@ -107,13 +109,44 @@ python-agent/app/
 | 阶段 | 输入 | 输出 | 备注 |
 |---|---|---|---|
 | 1. Demucs 分离 *(可选)* | 原音频路径 | `{stem_name: wav_path}` | 仅当 `separationMode != "none"` |
-| 2. Basic Pitch 转录 | 选定的 stem 路径 | `[{pitch,start,end,velocity}]`, bpm | ONNX 模型 `nmp.onnx`；librosa 估 BPM |
+| 2a. PYIN 单音旋律 *(可选)* | vocals.wav | `[{pitch,start,end,velocity}]` | 当 `melodyMode=vocal` 且目标 stem 为 `vocals` |
+| 2b. Basic Pitch 复音转录 | 选定的 stem 路径 | 同上 | 兜底；适合纯器乐 stem |
 | 3. 调性检测 | notes | `{key, mode, confidence, transposeToC}` | Krumhansl-Schmuckler |
-| 4. 转 C/Am *(可选)* | notes | 移调后 notes | 大调对齐 C，小调对齐 A |
+| 4a. 最佳可弹奏调 *(可选)* | notes | shift ∈ [-6, +5] | 输出 `recommendedShift`、`playableKey` |
+| 4b. 转 C/Am *(可选)* | notes | 移调后 notes | 与 4a 互斥；4a 优先 |
 | 5. 15 键映射 | notes | 落在 15 键集合内的 notes | adapt_range → resolve_accidentals → simplify → quantize → constrain |
-| 6. 打包 | — | `CubyScore` + `Metadata` | 含 `transcribedStem` 标记 |
+| 6. 打包 | — | `CubyScore` + `Metadata` | 含 `transcribedStem` / `melodyAlgo` / `recommendedShift` |
 
-### 4.3 Demucs 模块（[separator.py](../python-agent/app/pipeline/separator.py)）
+### 4.3 旋律提取：双算法
+
+| 算法 | 何时启用 | 适用 | 特点 |
+|---|---|---|---|
+| **Basic Pitch (ONNX)** | `melodyMode=auto`（默认） | 整曲 / 纯器乐 stem | 复音；快；但人声泛音+残余伴奏易碎 |
+| **PYIN (librosa)** | `melodyMode=vocal` 且 `transcribeStem=vocals` | 人声主旋律 | 帧级 F0 → 段聚合；天然单音；零额外依赖 |
+
+PYIN 默认参数（[melody_extractor.py](../python-agent/app/pipeline/melody_extractor.py)）：
+- `fmin=65Hz` (C2)，`fmax=1200Hz` (D6)，覆盖男低 ~ 女高
+- `hop_length=256 @22050Hz` → 约 11.6 ms / 帧
+- `voiced_prob ≥ 0.55` 才计入；段内允许 ±0.5 半音漂移
+- 段时长 < 100 ms 视作装饰丢弃；80 ms 内同音自动合并
+
+### 4.4 最佳可弹奏调（[key_optimizer.py](../python-agent/app/pipeline/key_optimizer.py)）
+
+对每个候选 `shift ∈ [-6, +5]` 半音打分：
+
+```
+score = 1.0 * 白键命中率(时长加权)
+      + 0.6 * 折叠前已在 [C4,C6] 的比例
+      - 0.3 * 折叠后音高跨度 / 24
+```
+
+取最高分作为推荐。元数据返回：
+- `recommendedShift`：玩家在 Sky 内按下的升降调键半音数（正=升）
+- `playableKey`：对应的"手感调"展示（C / D / Eb …）
+
+> 与 `transposeToC` 互斥：若同时开启，**`optimizePlayKey` 优先**。
+
+### 4.5 Demucs 模块（[separator.py](../python-agent/app/pipeline/separator.py)）
 
 - **模型**：`htdemucs`（Hybrid Transformer Demucs，~80 MB；MDX 2023 SOTA 之一）
 - **设备**：自动 MPS（Apple Silicon）→ CUDA → CPU
@@ -125,14 +158,14 @@ python-agent/app/
   - 可通过 `DEMUCS_MODEL=mdx_extra_q`（需 `diffq`，更小但单文件）切换轻量模型。
 - **输出落盘**：`/tmp/cuby-stems/<taskId>/<stem>.wav`（path 由 `STEMS_DIR` 覆盖）。
 
-### 4.4 Basic Pitch 模块（[transcriber.py](../python-agent/app/pipeline/transcriber.py)）
+### 4.6 Basic Pitch 模块（[transcriber.py](../python-agent/app/pipeline/transcriber.py)）
 
 - 优先加载 ONNX → CoreML → TFLite。
 - 输出 `note_events: [(start, end, pitch, velocity, pitch_bends), ...]`。
 - velocity 兼容 0–1 与 0–127 两种返回。
 - BPM 用 `librosa.beat.beat_track`（PLP 算法）。
 
-### 4.5 调性检测（[key_detector.py](../python-agent/app/pipeline/key_detector.py)）
+### 4.7 调性检测（[key_detector.py](../python-agent/app/pipeline/key_detector.py)）
 
 经典 **Krumhansl-Schmuckler**：
 1. 把音符按时长加权累积成 12 维音高直方图；
@@ -140,7 +173,7 @@ python-agent/app/
 3. 取最高分对应的调性；
 4. `transposeToC` = 把主音移到 C(0)/A(9) 的最短半音数（−6..+6）。
 
-### 4.6 15 键映射（[sky_mapper.py](../python-agent/app/pipeline/sky_mapper.py)）
+### 4.8 15 键映射（[sky_mapper.py](../python-agent/app/pipeline/sky_mapper.py)）
 
 Sky 15 键 = C4–C6 的两个八度的白键：
 
@@ -172,11 +205,19 @@ SKY_KEYS = [60, 62, 64, 65, 67, 69, 71, 72, 74, 76, 77, 79, 81, 83, 84]
 请求 `options`（[types.ts](../web/src/types.ts)）：
 ```jsonc
 {
-  "transposeToC":   true,         // 是否转 C/Am
-  "simplifyMelody": true,         // 是否做装饰音过滤
-  "quantizeGrid":   16,           // 量化网格 8 或 16
-  "separationMode": "vocals",     // "none" | "vocals" | "4stems"
-  "transcribeStem": "no_vocals"   // 可选；不传时取该模式默认 stem
+  "transposeToC":    true,         // 是否转 C/Am（与 optimizePlayKey 互斥）
+  "simplifyMelody":  true,         // 是否做装饰音过滤
+  "quantizeGrid":    16,           // 量化网格 8 或 16
+  "separationMode":  "vocals",     // "none" | "vocals" | "4stems" | "6stems"
+  "transcribeStem":  "no_vocals",  // 可选；不传时取该模式默认 stem
+  "melodyMode":      "auto",       // "auto" Basic Pitch | "vocal" PYIN（仅 vocals 生效）
+  "optimizePlayKey": true,         // 枚举最佳可弹奏调，输出推荐升降调键
+
+  // v2 复音 / 和弦感知（一键预设默认 polyphonic）
+  "arrangementMode":  "polyphonic",// "polyphonic" 保留和弦 | "monophonic" 仅主旋律
+  "maxSimultaneous":  4,           // 同时按下的最大键数（受 15 键玩家手指数约束，2-6）
+  "detectChords":     true,        // 是否做和弦识别（chroma + Viterbi）
+  "forceMonophonic":  false        // 兼容旧字段；为 true 时强制单音骨架
 }
 ```
 
@@ -187,10 +228,19 @@ SKY_KEYS = [60, 62, 64, 65, 67, 69, 71, 72, 74, 76, 77, 79, 81, 83, 84]
   "status": "completed",
   "progress": 100,
   "metadata": {
-    "detectedKey": "C", "detectedMode": "major",
+    "detectedKey": "D", "detectedMode": "major",
     "bpm": 117.45, "duration": 60.0,
     "noteCount": 112, "elapsed": 2.14,
-    "transcribedStem": "no_vocals"
+    "transcribedStem": "vocals",
+    "melodyAlgo": "pyin",
+    "recommendedShift": 2,        // 玄戏内升降调键调 +2
+    "playableKey": "D",
+    "arrangementMode": "polyphonic",
+    "maxConcurrent": 4,           // 实际同帧并发上限（reducer 输出）
+    "chords": [                   // detectChords=true 时返回，按时间升序
+      { "start": 0.66, "end": 2.86, "label": "Am", "root": 9, "quality": "min" },
+      { "start": 2.86, "end": 4.30, "label": "F",  "root": 5, "quality": "maj" }
+    ]
   },
   "stems": [
     { "name": "vocals",    "url": "/api/stems/abc.../vocals.wav",    "duration": 60.0 },

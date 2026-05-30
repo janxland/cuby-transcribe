@@ -1,4 +1,6 @@
 // 纯函数工具
+import { stemRgb } from "@/stems";
+
 export function fmt(t: number, withDeci = true): string {
   if (!Number.isFinite(t) || t < 0) t = 0;
   const m = Math.floor(t / 60);
@@ -40,15 +42,7 @@ export function gainToDb(g: number): string {
   return `${db >= 0 ? "+" : ""}${db.toFixed(1)}`;
 }
 
-/** 颜色映射：未来新增 stem 在 STEM_REGISTRY 里加项后此处自动 fallback */
+/** 颜色映射：直接派生自 STEM_REGISTRY，新增 stem 只需改注册表。 */
 export function waveColor(name: string): string {
-  switch (name) {
-    case "vocals":    return "#f472b6";
-    case "no_vocals": return "#38bdf8";
-    case "drums":     return "#fbbf24";
-    case "bass":      return "#a78bfa";
-    case "other":     return "#34d399";
-    case "original":  return "#94a3b8";
-    default:          return "#818cf8";
-  }
+  return stemRgb(name);
 }

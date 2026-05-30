@@ -118,3 +118,37 @@ def process(notes: List[dict], bpm: float, simplify: bool = True, grid: int = 16
     notes = constrain_to_sky(notes)
     notes.sort(key=lambda n: n["start"])
     return notes
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 复音（多指）路径：与 voicing_reducer 配合
+# ─────────────────────────────────────────────────────────────────────
+
+def process_polyphonic(
+    notes: List[dict],
+    bpm: float,
+    chord_segments: list | None = None,
+    melody_notes: list | None = None,
+    melody_set: set | None = None,  # 兼容旧调用
+    grid: int = 16,
+    max_simultaneous: int = 4,
+) -> tuple[List[dict], int]:
+    """
+    保留和声的 15 键 voicing：返回 (notes, max_concurrent)。
+
+    melody_notes（可选）= 权威旋律线（如 PYIN 人声）。给了就用，没给就从 notes 取 top。
+    """
+    if not notes and not melody_notes:
+        return [], 0
+    from . import voicing_reducer
+    reduced, max_concurrent = voicing_reducer.reduce(
+        notes,
+        bpm=bpm,
+        chord_segments=chord_segments,
+        melody_notes=melody_notes,
+        melody_set=melody_set,
+        grid=grid,
+        max_simultaneous=max_simultaneous,
+    )
+    reduced.sort(key=lambda n: (n["start"], -n["pitch"]))
+    return reduced, max_concurrent

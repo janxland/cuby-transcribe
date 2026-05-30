@@ -11,8 +11,8 @@
  *  - 试听：与 Sky15 共用 `synth.ts`，被编辑音符所属 stem 的音色暂未细分，统一回退到 "piano"。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useStore } from "../../store";
-import { stemMeta } from "../../stems";
+import { useStoreShallow } from "@/selectors";
+import { stemMeta } from "@/stems";
 import { useMixerOptional } from "../mixer";
 import { Transport } from "../mixer/Transport";
 import { playNote } from "../synth";
@@ -32,7 +32,7 @@ const DEFAULT_VIEWPORT: EditorViewport = {
 };
 
 export function ScoreEditor() {
-  const { scores, activeStems } = useStore();
+  const { scores, activeStems } = useStoreShallow((s) => ({ scores: s.scores, activeStems: s.activeStems }));
   const stemKeys = Object.keys(scores);
 
   // 编辑哪一份 —— 默认主显；切换由 toolbar 控制；外层切 activeStems 时若当前消失则回落到主显
@@ -68,7 +68,7 @@ function EditorBody({
   stems: string[];
   onEditingStemChange: (s: string) => void;
 }) {
-  const { scores, updateScoreNotes } = useStore();
+  const { scores, updateScoreNotes } = useStoreShallow((s) => ({ scores: s.scores, updateScoreNotes: s.updateScoreNotes }));
   const mixer = useMixerOptional();
   const entry = scores[editingStem];
   const bpm = entry.meta.bpm || 120;

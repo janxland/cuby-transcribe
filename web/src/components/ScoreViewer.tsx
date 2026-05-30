@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { useStore } from "../store";
-import { stemMeta } from "../stems";
+import { useStore } from "@/store";
+import { stemMeta } from "@/stems";
+import { usePrimaryScore, useScoreList, useStoreShallow } from "@/selectors";
 import { PianoRoll } from "./PianoRoll";
 import { Sky15Keys } from "./Sky15Keys";
 import { StemsPanel } from "./StemsPanel";
@@ -11,7 +12,10 @@ import { MixerProvider } from "./mixer";
 type Tab = "stems" | "sky" | "edit" | "roll" | "json";
 
 export function ScoreViewer() {
-  const { score, stems, scores, activeStems, toggleActiveStem } = useStore();
+  const score = usePrimaryScore();
+  const { stems, activeStems } = useStoreShallow((s) => ({ stems: s.stems, activeStems: s.activeStems }));
+  const toggleActiveStem = useStore((s) => s.toggleActiveStem);
+  const scoreList = useScoreList();
   const [tab, setTab] = useState<Tab>("stems");
 
   if (!score && !stems.length) {
@@ -29,11 +33,6 @@ export function ScoreViewer() {
     ["roll", "钢琴卷帘"],
     ["json", "JSON"],
   ];
-
-  const scoreList = Object.entries(scores).map(([stem, e]) => ({
-    stem,
-    noteCount: e.score.tracks?.[0]?.notes?.length ?? 0,
-  }));
 
   // 把 MixerProvider 提到 Tabs 之上：切到 Sky / Roll 时混音引擎不丢失，
   // Sky15Keys 可以共用同一个时间轴 + 音轨状态。
@@ -97,10 +96,16 @@ export function ScoreViewer() {
         </div>
       )}
 
-      {/* 内容区：撑满剩余空间 + 自身滚动 */}
-      <div className="flex-1 min-h-0 overflow-auto">
-        {tab === "stems" && <ErrorBoundary name="StemsPanel"><StemsPanel /></ErrorBoundary>}
-        {tab === "sky" && (score ? <div className="p-3"><ErrorBoundary name="Sky15Keys"><Sky15Keys /></ErrorBoundary></div> : <Empty />)}
+      {/* 内容区：撑满剩余空间 + 自身滚动
+          注意：Sky15Keys / StemsPanel 在切换标签时**保持挂载**（用 hidden 切换），
+          这样 15 键热力图与底部混音器的播放状态、按键高亮不会因为切到 编辑/卷帘/JSON 而中断。 */}
+      <div className="flex-1 min-h-0 overflow-auto relative">
+        <div className={tab === "stems" ? "h-full" : "hidden"}>
+          <ErrorBoundary name="StemsPanel"><StemsPanel /></ErrorBoundary>
+        </div>
+        <div className={tab === "sky" ? "h-full" : "hidden"}>
+          {score ? <div className="p-3"><ErrorBoundary name="Sky15Keys"><Sky15Keys /></ErrorBoundary></div> : <Empty />}
+        </div>
         {tab === "edit" && (score ? <ErrorBoundary name="ScoreEditor"><ScoreEditor /></ErrorBoundary> : <Empty />)}
         {tab === "roll" && (score ? <div className="p-3"><ErrorBoundary name="PianoRoll"><PianoRoll /></ErrorBoundary></div> : <Empty />)}
         {tab === "json" && score && (

@@ -4,7 +4,8 @@
  *
  * 只做"取数据 + 调动作"，不含任何 UI 逻辑。
  */
-import { useStore } from "../store";
+import { useStore } from "@/store";
+import { useStoreShallow, usePrimaryMeta } from "@/selectors";
 import { MixerPanel } from "./mixer";
 
 interface Props {
@@ -13,7 +14,12 @@ interface Props {
 }
 
 export function StemsPanel({ withTransport = true }: Props = {}) {
-  const { stems, score, scores, activeStems, task, retranscribeWith, toggleActiveStem } = useStore();
+  const { stems, scores, activeStems, task } = useStoreShallow((s) => ({
+    stems: s.stems, scores: s.scores, activeStems: s.activeStems, task: s.task,
+  }));
+  const retranscribeWith = useStore((s) => s.retranscribeWith);
+  const toggleActiveStem = useStore((s) => s.toggleActiveStem);
+  const meta = usePrimaryMeta();
   if (!stems.length) {
     return (
       <div className="h-full flex items-center justify-center text-slate-500 text-sm">
@@ -22,8 +28,11 @@ export function StemsPanel({ withTransport = true }: Props = {}) {
     );
   }
   const busy = !!task && task.status !== "completed" && task.status !== "failed";
-  const bpm = (score?.meta as any)?.bpm as number | undefined;
+  const bpm = meta?.bpm;
   const transcribedStems = Object.keys(scores);
+  // 「重扒」需要后端有分离出的 stem 文件；当列表只剩前端注入的 synthetic 'original'
+  // （未分离场景）时禁用，避免点了拿到 404。
+  const hasSeparatedStems = stems.some((s) => s.name !== "original");
   return (
     <MixerPanel
       tracks={stems}
@@ -32,7 +41,7 @@ export function StemsPanel({ withTransport = true }: Props = {}) {
       bpm={bpm}
       disabled={busy}
       withTransport={withTransport}
-      onRetranscribe={(stem) => retranscribeWith(stem)}
+      onRetranscribe={hasSeparatedStems ? (stem) => retranscribeWith(stem) : undefined}
       onToggleScore={(stem) => toggleActiveStem(stem)}
     />
   );

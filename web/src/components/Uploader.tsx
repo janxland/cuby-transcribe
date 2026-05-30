@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from "react";
-import { Upload, Music, X, Sparkles, CheckSquare, Square } from "lucide-react";
-import { useStore } from "../store";
-import { STEM_REGISTRY, SELECTABLE_STEMS, deriveMode, type StemName } from "../stems";
+import { Upload, Music, X, Sparkles, CheckSquare, Square, Wand2 } from "lucide-react";
+import { useStore } from "@/store";
+import { STEM_REGISTRY, SELECTABLE_STEMS, deriveMode, type StemName } from "@/stems";
 
 // 模式说明（根据已选 stems 自动派生展示，仅作"成本预估"提示）
 const MODE_HINTS: Record<string, string> = {
@@ -41,6 +41,29 @@ export function Uploader() {
   };
 
   const currentStem = options.transcribeStem ?? chosen[0];
+
+  /**
+   * 「一键 AI 扒谱」预设（v2 · 复音保留 + 和弦感知）：
+   *   去人声 → 在伴奏轨上跑 Basic Pitch（复音）→ 和弦识别 → voicing reducer
+   *   产出：旋律 + 根音 + 三/五音的多指演奏谱（光遇 4 指可控）。
+   * 对比旧版强单音：保留和弦让谱子"立得住"，不再单薄。
+   */
+  const applyOneClickPreset = () => {
+    setOptions({
+      stems: ["vocals", "no_vocals"],
+      separationMode: "vocals",
+      transcribeStem: "no_vocals",
+      melodyMode: "auto",
+      arrangementMode: "polyphonic",   // 关键：保留和弦
+      maxSimultaneous: 4,
+      detectChords: true,
+      forceMonophonic: false,
+      optimizePlayKey: true,
+      transposeToC: false,
+      simplifyMelody: false,           // 复音模式下别再"装饰音剪枝"，让 voicing reducer 决定
+      quantizeGrid: 16,
+    });
+  };
 
   return (
     <div className="space-y-5">
@@ -164,10 +187,11 @@ export function Uploader() {
       <div>
         <div className="text-xs text-slate-400 mb-2">音乐处理</div>
         <div className="grid grid-cols-3 gap-3 text-sm">
-          <label className="flex items-center gap-2 cursor-pointer">
+          <label className="flex items-center gap-2 cursor-pointer" title="把整曲移到 C 大调/A 小调，与 optimizePlayKey 互斥">
             <input
               type="checkbox"
-              checked={options.transposeToC}
+              checked={!!options.transposeToC && !options.optimizePlayKey}
+              disabled={!!options.optimizePlayKey}
               onChange={(e) => setOptions({ transposeToC: e.target.checked })}
               className="accent-indigo-500"
             />
@@ -194,7 +218,88 @@ export function Uploader() {
             </select>
           </label>
         </div>
+
+        {/* 进阶：旋律算法 + 最佳可弹奏调 + 强制单旋律 */}
+        <div className="grid grid-cols-2 gap-3 mt-3 text-sm">
+          <label
+            className="flex items-center gap-2 cursor-pointer"
+            title="vocal 模式仅在扒谱目标为人声时生效，使用 PYIN 提取干净的单音旋律"
+          >
+            <span className="text-slate-400 text-xs">旋律</span>
+            <select
+              value={options.melodyMode ?? "auto"}
+              onChange={(e) => setOptions({ melodyMode: e.target.value as "auto" | "vocal" })}
+              className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs flex-1"
+            >
+              <option value="auto">复音 (Basic Pitch)</option>
+              <option value="vocal">人声单音 (PYIN)</option>
+            </select>
+          </label>
+          <label
+            className="flex items-center gap-2 cursor-pointer"
+            title="枚举 12 个移调，挑白键命中率/音域最贴合的，输出推荐升降调键"
+          >
+            <input
+              type="checkbox"
+              checked={!!options.optimizePlayKey}
+              onChange={(e) => setOptions({
+                optimizePlayKey: e.target.checked,
+                transposeToC: e.target.checked ? false : options.transposeToC,
+              })}
+              className="accent-amber-400"
+            />
+            <span>最佳可弹奏调</span>
+          </label>
+          <label
+            className="flex items-center gap-2 cursor-pointer col-span-2"
+            title="编配模式：复音保留和弦/和声 (推荐) · 单音只留主旋律线"
+          >
+            <span className="text-slate-400 text-xs">编配</span>
+            <select
+              value={options.arrangementMode ?? "polyphonic"}
+              onChange={(e) => {
+                const m = e.target.value as "polyphonic" | "monophonic";
+                setOptions({
+                  arrangementMode: m,
+                  forceMonophonic: m === "monophonic",
+                });
+              }}
+              className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs flex-1"
+            >
+              <option value="polyphonic">复音 · 保留和弦（推荐）</option>
+              <option value="monophonic">单音 · 仅主旋律</option>
+            </select>
+          </label>
+          {options.arrangementMode !== "monophonic" && (
+            <label
+              className="flex items-center gap-2 cursor-pointer col-span-2"
+              title="同帧最大并发音数（光遇 4 指上限）"
+            >
+              <span className="text-slate-400 text-xs">同按上限</span>
+              <input
+                type="number"
+                min={2}
+                max={6}
+                value={options.maxSimultaneous ?? 4}
+                onChange={(e) => setOptions({ maxSimultaneous: Number(e.target.value) || 4 })}
+                className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs w-16"
+              />
+              <span className="text-slate-500 text-xs">指</span>
+            </label>
+          )}
+        </div>
       </div>
+
+      {/* 一键预设：去人声 + 复音保留和弦 + 调键优化 */}
+      <button
+        type="button"
+        onClick={applyOneClickPreset}
+        disabled={!file || !!busy}
+        className="w-full py-2 rounded-lg border border-amber-500/60 bg-amber-500/10 hover:bg-amber-500/20 text-amber-200 text-xs flex items-center justify-center gap-2 disabled:opacity-50"
+      >
+        <Wand2 className="w-3.5 h-3.5" />
+        一键 AI 扒谱 · 去人声 + 保留和弦 + 最佳调
+      </button>
 
       <button
         disabled={!file || !!busy}

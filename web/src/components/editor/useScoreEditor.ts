@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { EditorNote } from "./types";
 import { toScoreNotes } from "./types";
-import type { Note as ScoreNote } from "../../types";
+import type { Note as ScoreNote } from "@/types";
 
 const HISTORY_LIMIT = 100;
 
@@ -31,7 +31,6 @@ export interface ScoreEditorApi {
   addNote: (n: Omit<EditorNote, "id">) => string;
   deleteIds: (ids: Iterable<string>) => void;
   patchIds: (ids: Iterable<string>, fn: (n: EditorNote) => EditorNote) => void;
-  replaceAll: (notes: EditorNote[]) => void;
 
   // 历史
   undo: () => void;
@@ -135,10 +134,6 @@ export function useScoreEditor(
     setPresent((p) => p.map((n) => (set.has(n.id) ? fn(n) : n)));
   }, []);
 
-  const replaceAll: ScoreEditorApi["replaceAll"] = useCallback((notes) => {
-    setPresent(notes);
-  }, []);
-
   // historyTick used only for memo invalidation
   void historyTick;
 
@@ -146,7 +141,7 @@ export function useScoreEditor(
     notes: present,
     selection,
     select, clearSelection, selectAll,
-    pushHistory, addNote, deleteIds, patchIds, replaceAll,
+    pushHistory, addNote, deleteIds, patchIds,
     undo, redo,
     canUndo: pastRef.current.length > 0,
     canRedo: futureRef.current.length > 0,

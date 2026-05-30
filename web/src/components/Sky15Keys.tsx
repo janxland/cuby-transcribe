@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, SlidersHorizontal, X } from "lucide-react";
-import { useStore } from "../store";
+import { useStore } from "@/store";
+import { useStoreShallow, usePrimaryMeta } from "@/selectors";
 import { useMixerOptional } from "./mixer";
 import { Transport } from "./mixer/Transport";
 import { StemsPanel } from "./StemsPanel";
 import { PRESETS, playNote, type PresetId } from "./synth";
-import { stemMeta } from "../stems";
-import type { Note } from "../types";
+import { stemMeta } from "@/stems";
+import { pitchName } from "@/utils/music";
+import { isTypingTarget } from "@/utils/dom";
+import type { Note } from "@/types";
 
 // 光遇 15 键，按游戏内 3 行 × 5 列布局
 const SKY_KEYS = [60, 62, 64, 65, 67, 69, 71, 72, 74, 76, 77, 79, 81, 83, 84];
@@ -30,7 +33,9 @@ interface SchedNote { time: number; duration: number; pitch: number; stem: strin
  *  - 底部可上拉混音台抽屉，做联动 A/B 对比
  */
 export function Sky15Keys() {
-  const { scores, activeStems, toggleActiveStem } = useStore();
+  const { scores, activeStems } = useStoreShallow((s) => ({ scores: s.scores, activeStems: s.activeStems }));
+  const toggleActiveStem = useStore((s) => s.toggleActiveStem);
+  const primaryMeta = usePrimaryMeta();
   const mixer = useMixerOptional();
 
   // 每条 stem 一个 preset；状态本地维护，stem 退出 active 时保留偏好以便再次加入恢复
@@ -97,11 +102,8 @@ export function Sky15Keys() {
 
   // ── 键盘快捷键 ──────────────────────────────────────────────
   useEffect(() => {
-    const isTyping = (el: EventTarget | null) =>
-      el instanceof HTMLElement &&
-      (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
     const onKey = (e: KeyboardEvent) => {
-      if (isTyping(e.target) || e.repeat) return;
+      if (isTypingTarget(e.target) || e.repeat) return;
       const idx = KEY_MAP[e.key.toLowerCase()];
       if (idx === undefined) return;
       e.preventDefault();
@@ -111,34 +113,45 @@ export function Sky15Keys() {
     return () => window.removeEventListener("keydown", onKey);
   }, [triggerManual]);
 
-  // ── 自动弹奏调度器：跟随 mixer.time 推进，多谱同步触发 ──────
+  // ── 自动弹奏调度器：跟随 mixer.time 推进，游标式扫描避免 O(N) 重复 ─────
+  // cursorRef = stream 中下一个未处理的音符下标；stream 变动或 seek 时重置。
+  const cursorRef = useRef(0);
   const lastTimeRef = useRef(0);
+  // stream 变化时重新对齐游标
   useEffect(() => {
-    if (mixer) lastTimeRef.current = mixer.time;
-  }, [mixer?.playing]); // eslint-disable-line react-hooks/exhaustive-deps
+    const t = mixer?.time ?? 0;
+    let i = 0;
+    while (i < stream.length && stream[i].time <= t) i++;
+    cursorRef.current = i;
+    lastTimeRef.current = t;
+  }, [stream, mixer?.playing]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!followMixer) return;
     const t = mixer!.time;
     const last = lastTimeRef.current;
-    // seek / 大跨度跳变：丢弃未处理区间，重新对齐
+    // seek / 大跨度跳变：重新定位游标
     if (t < last || t - last > 0.5) {
+      let i = 0;
+      while (i < stream.length && stream[i].time <= t) i++;
+      cursorRef.current = i;
       lastTimeRef.current = t;
       return;
     }
     if (t > last) {
-      for (const n of stream) {
-        if (n.time <= last) continue;
-        if (n.time > t) break;
-        fireNote(n.pitch, presetOf(n.stem));
+      let i = cursorRef.current;
+      while (i < stream.length && stream[i].time <= t) {
+        const n = stream[i];
+        if (n.time > last) fireNote(n.pitch, presetOf(n.stem));
+        i++;
       }
+      cursorRef.current = i;
       lastTimeRef.current = t;
     }
   }, [mixer?.time, followMixer, stream, fireNote, presetOf]);
 
   // 主显 score 的 bpm（如果有）—— 给 Transport 显示用
-  const primaryStem = activeStems[0];
-  const bpm = primaryStem ? (scores[primaryStem]?.meta?.bpm as number | undefined) : undefined;
+  const bpm = primaryMeta?.bpm;
 
   return (
     <div className="flex flex-col gap-3">
@@ -292,9 +305,4 @@ function Kbd({ children }: { children: React.ReactNode }) {
       {children}
     </kbd>
   );
-}
-
-function pitchName(p: number): string {
-  const names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-  return `${names[p % 12]}${Math.floor(p / 12) - 1}`;
 }

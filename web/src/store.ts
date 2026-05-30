@@ -1,8 +1,16 @@
+/**
+ * 全局状态：
+ *  - 单一事实源 = `scores` 集合 + `activeStems` 顺序；
+ *  - 派生数据（主显 score / meta）通过 selectors.ts 暴露的 hooks 消费，store 自身不再冗余持有；
+ *  - 异步流程（上传 / 轮询 / 重扒）走带版本守卫 + AbortController 的 runJob，
+ *    切文件 / 取消时旧请求不会回写新状态。
+ */
 import { create } from "zustand";
-import type { CubyScore, Metadata, StemInfo, TaskState, UploadOptions } from "./types";
-import { getTask, retranscribeStem, uploadAudio } from "./api";
+import type { CubyScore, Metadata, StemInfo, TaskState, UploadOptions } from "@/types";
+import { getTask, retranscribeStem, uploadAudio } from "@/api";
+import { toAppError } from "@/lib/http";
 
-interface ScoreEntry { score: CubyScore; meta: Metadata }
+export interface ScoreEntry { score: CubyScore; meta: Metadata }
 
 interface Store {
   file: File | null;
@@ -10,19 +18,17 @@ interface Store {
   options: UploadOptions;
 
   task: TaskState | null;
-  parentTaskId: string | null;     // 含 stems 的首个任务，retranscribe 用
+  /** 含 stems 的首个任务，retranscribe 用 */
+  parentTaskId: string | null;
 
   /** 已生成的扒谱集合，key = stem name（vocals / piano / drums ...） */
   scores: Record<string, ScoreEntry>;
   /**
    * 当前「正在使用」的扒谱 stem 列表（有序，front=主显）。
    *   - Sky15 会把列表里所有 score 同时按播放头自动弹奏；
-   *   - PianoRoll / JSON 等单视图组件读取 `score`/`meta`（= activeStems[0] 对应的条目）。
+   *   - 主显 score / meta 通过 selectors.ts 派生，store 不再冗余存储。
    */
   activeStems: string[];
-  /** activeStems[0] 对应的 score / meta —— 派生字段，便于单视图消费者读取 */
-  score: CubyScore | null;
-  meta: Metadata | null;
 
   stems: StemInfo[];
 
@@ -47,18 +53,42 @@ const DEFAULT_OPTIONS: UploadOptions = {
   quantizeGrid: 16,
   separationMode: "none",
   stems: [],
+  melodyMode: "auto",
+  arrangementMode: "polyphonic",
+  maxSimultaneous: 4,
+  detectChords: true,
+  forceMonophonic: false,
+  optimizePlayKey: false,
 };
 
+const POLL_INTERVAL_MS = 1200;
+
+// ── 异步任务令牌：保证一次只有一个有效轮询写回 store ────────────────
+interface JobToken { ctrl: AbortController; id: number }
+let activeJob: JobToken | null = null;
+let jobSeq = 0;
+
+function startJob(): JobToken {
+  activeJob?.ctrl.abort();
+  const token: JobToken = { ctrl: new AbortController(), id: ++jobSeq };
+  activeJob = token;
+  return token;
+}
+function isCurrent(token: JobToken): boolean {
+  return activeJob === token && !token.ctrl.signal.aborted;
+}
+
 // 切换/清除文件时的统一重置
-const blank = () => ({
-  task: null, parentTaskId: null,
-  scores: {} as Record<string, ScoreEntry>,
-  activeStems: [] as string[],
-  score: null as CubyScore | null,
-  meta: null as Metadata | null,
-  stems: [] as StemInfo[],
-  currentTime: 0,
-});
+function blankPatch() {
+  return {
+    task: null,
+    parentTaskId: null,
+    scores: {} as Record<string, ScoreEntry>,
+    activeStems: [] as string[],
+    stems: [] as StemInfo[],
+    currentTime: 0,
+  };
+}
 
 /**
  * 把新生成的 score 合并进 scores 集合：
@@ -70,23 +100,26 @@ function mergeScore(
   prevActive: string[],
   score: CubyScore,
   meta: Metadata,
-) {
+): { scores: Record<string, ScoreEntry>; activeStems: string[] } {
   const stem = meta.transcribedStem || "unknown";
-  const scores = { ...prevScores, [stem]: { score, meta } };
-  const activeStems = [stem, ...prevActive.filter((s) => s !== stem)];
-  return { scores, activeStems, score, meta };
+  return {
+    scores: { ...prevScores, [stem]: { score, meta } },
+    activeStems: [stem, ...prevActive.filter((s) => s !== stem)],
+  };
 }
 
 export const useStore = create<Store>((set, get) => ({
   file: null,
   audioUrl: null,
   options: DEFAULT_OPTIONS,
-  ...blank(),
+  ...blankPatch(),
 
   setFile: (f) => {
+    activeJob?.ctrl.abort();
+    activeJob = null;
     const prev = get().audioUrl;
     if (prev) URL.revokeObjectURL(prev);
-    set({ file: f, audioUrl: f ? URL.createObjectURL(f) : null, ...blank() });
+    set({ file: f, audioUrl: f ? URL.createObjectURL(f) : null, ...blankPatch() });
   },
 
   setOptions: (o) => set({ options: { ...get().options, ...o } }),
@@ -95,20 +128,14 @@ export const useStore = create<Store>((set, get) => ({
   toggleActiveStem: (stem) => {
     const { scores, activeStems } = get();
     if (!scores[stem]) return;
-    const has = activeStems.includes(stem);
-    const next = has
+    const next = activeStems.includes(stem)
       ? activeStems.filter((s) => s !== stem)
       : [stem, ...activeStems];
-    const primary = next[0] ?? null;
-    set({
-      activeStems: next,
-      score: primary ? scores[primary].score : null,
-      meta: primary ? scores[primary].meta : null,
-    });
+    set({ activeStems: next });
   },
 
   updateScoreNotes: (stem, notes) => {
-    const { scores, activeStems } = get();
+    const { scores } = get();
     const entry = scores[stem];
     if (!entry) return;
     const tracks = entry.score.tracks;
@@ -117,78 +144,117 @@ export const useStore = create<Store>((set, get) => ({
       ...entry.score,
       tracks: [{ ...head, notes }, ...tracks.slice(1)],
     };
-    const nextScores = { ...scores, [stem]: { score: nextScore, meta: entry.meta } };
-    const patch: Partial<Store> = { scores: nextScores };
-    if (activeStems[0] === stem) patch.score = nextScore;
-    set(patch as any);
+    set({ scores: { ...scores, [stem]: { score: nextScore, meta: entry.meta } } });
   },
 
   reset: () => {
+    activeJob?.ctrl.abort();
+    activeJob = null;
     const prev = get().audioUrl;
     if (prev) URL.revokeObjectURL(prev);
-    set({ file: null, audioUrl: null, ...blank() });
+    set({ file: null, audioUrl: null, ...blankPatch() });
   },
 
   startUpload: async () => {
     const { file, options } = get();
     if (!file) return;
+    const job = startJob();
+
     set({
       task: { taskId: "", status: "queued", progress: 0, message: "uploading..." },
       stems: [],
-      scores: {}, activeStems: [], score: null, meta: null,
+      scores: {},
+      activeStems: [],
     });
 
     let taskId: string;
     try {
-      const r = await uploadAudio(file, options);
+      const r = await uploadAudio(file, options, job.ctrl.signal);
+      if (!isCurrent(job)) return;
       taskId = r.taskId;
       set({ task: { taskId, status: "queued", progress: 5, message: "queued" }, parentTaskId: taskId });
-    } catch (e: any) {
-      set({ task: { taskId: "", status: "failed", progress: 0, message: "upload failed", error: e.message } });
+    } catch (e) {
+      if (!isCurrent(job)) return;
+      const err = toAppError(e);
+      if (err.code === "aborted") return;
+      set({ task: { taskId: "", status: "failed", progress: 0, message: "upload failed", error: err.message } });
       return;
     }
 
-    await pollUntilDone(taskId, (s) => {
+    await pollUntilDone(taskId, job, (s) => {
       set({ task: s });
-      if (s.status === "completed") {
-        const patch: Partial<Store> = { stems: s.stems ?? get().stems };
-        if (s.result && s.metadata) {
-          Object.assign(patch, mergeScore(get().scores, get().activeStems, s.result, s.metadata));
-        }
-        set(patch as any);
+      if (s.status !== "completed") return;
+      // 当未做分离时，后端 stems 为空 → 把"原音"做成一条虚拟 stem，
+      // 使右侧 MixerPanel 仍能播放、且 transcribedStem='original' 能与之对齐。
+      const { audioUrl, scores, activeStems } = get();
+      let stems = s.stems ?? [];
+      if (stems.length === 0 && audioUrl) {
+        stems = [{ name: "original", url: audioUrl, duration: s.metadata?.duration ?? 0 }];
       }
+      const patch: Partial<Store> = { stems };
+      if (s.result && s.metadata) {
+        Object.assign(patch, mergeScore(scores, activeStems, s.result, s.metadata));
+      }
+      set(patch);
     });
   },
 
-  retranscribeWith: async (stem: string) => {
+  retranscribeWith: async (stem) => {
     const parent = get().parentTaskId;
     if (!parent) return;
+    const job = startJob();
     // 关键：不再清空当前 score / meta；让用户在等待期间仍能查看 / 切换已有扒谱
     set({ task: { taskId: "", status: "processing", progress: 10, message: `retranscribing ${stem}…` } });
     try {
-      const r = await retranscribeStem(parent, stem);
-      await pollUntilDone(r.taskId, (s) => {
+      const r = await retranscribeStem(parent, stem, job.ctrl.signal);
+      if (!isCurrent(job)) return;
+      await pollUntilDone(r.taskId, job, (s) => {
         set({ task: s });
         if (s.status === "completed" && s.result && s.metadata) {
-          set(mergeScore(get().scores, get().activeStems, s.result, s.metadata) as any);
+          const { scores, activeStems } = get();
+          set(mergeScore(scores, activeStems, s.result, s.metadata));
         }
       });
-    } catch (e: any) {
-      set({ task: { taskId: "", status: "failed", progress: 0, message: "failed", error: e.message } });
+    } catch (e) {
+      if (!isCurrent(job)) return;
+      const err = toAppError(e);
+      if (err.code === "aborted") return;
+      set({ task: { taskId: "", status: "failed", progress: 0, message: "failed", error: err.message } });
     }
   },
 }));
 
-async function pollUntilDone(taskId: string, onUpdate: (s: TaskState) => void) {
-  while (true) {
-    await new Promise((r) => setTimeout(r, 1200));
+async function pollUntilDone(
+  taskId: string,
+  job: JobToken,
+  onUpdate: (s: TaskState) => void,
+): Promise<void> {
+  while (isCurrent(job)) {
+    await wait(POLL_INTERVAL_MS, job.ctrl.signal);
+    if (!isCurrent(job)) return;
     try {
-      const s = await getTask(taskId);
+      const s = await getTask(taskId, job.ctrl.signal);
+      if (!isCurrent(job)) return;
       onUpdate(s);
       if (s.status === "completed" || s.status === "failed") return;
-    } catch (e: any) {
-      onUpdate({ taskId, status: "failed", progress: 0, message: "poll failed", error: e.message });
+    } catch (e) {
+      if (!isCurrent(job)) return;
+      const err = toAppError(e);
+      if (err.code === "aborted") return;
+      onUpdate({ taskId, status: "failed", progress: 0, message: "poll failed", error: err.message });
       return;
     }
   }
+}
+
+function wait(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) { resolve(); return; }
+    const onAbort = () => { window.clearTimeout(t); resolve(); };
+    const t = window.setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }

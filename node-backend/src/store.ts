@@ -7,6 +7,16 @@ export interface TaskOptions {
   separationMode?: "none" | "vocals" | "4stems";
   transcribeStem?:
     | "original" | "vocals" | "no_vocals" | "drums" | "bass" | "other";
+  /** v2: polyphonic 保留和弦 / monophonic 单音 */
+  arrangementMode?: "polyphonic" | "monophonic";
+  /** 同帧最大并发音数（polyphonic 模式生效，建议 2-4） */
+  maxSimultaneous?: number;
+  /** 是否做和弦识别（polyphonic 模式必备；monophonic 仅作元数据展示） */
+  detectChords?: boolean;
+  /** 旧字段，兼容；等价于 arrangementMode='monophonic' */
+  forceMonophonic?: boolean;
+  melodyMode?: "auto" | "vocal";
+  optimizePlayKey?: boolean;
 }
 
 export interface StemInfo {

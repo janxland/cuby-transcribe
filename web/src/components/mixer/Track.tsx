@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Download, RotateCw, Eye, CheckCircle2 } from "lucide-react";
 import { useMixer } from "./useMixer";
-import { stemMeta } from "../../stems";
+import { stemMeta } from "@/stems";
 import { gainToDb, fmt, pct, safeDur, waveColor } from "./utils";
 import { getPeaks } from "./audio";
 
@@ -181,14 +181,14 @@ function ChannelStrip({
 function LevelMeter({ name }: { name: string }) {
   const m = useMixer();
   const [level, setLevel] = useState(0);
-  const buf = useRef<Uint8Array | null>(null);
+  const buf = useRef<Uint8Array<ArrayBuffer> | null>(null);
   const raf = useRef<number | null>(null);
   useEffect(() => {
     const loop = () => {
       const an = m.getAnalyser(name);
       if (an) {
         if (!buf.current || buf.current.length !== an.fftSize) {
-          buf.current = new Uint8Array(an.fftSize);
+          buf.current = new Uint8Array(new ArrayBuffer(an.fftSize));
         }
         an.getByteTimeDomainData(buf.current);
         let sum = 0;

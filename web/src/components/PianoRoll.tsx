@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useRef } from "react";
-import { useStore } from "../store";
+import { useStore } from "@/store";
+import { usePrimaryScore } from "@/selectors";
+import { NATURAL_PCS, PITCH_NAMES } from "@/utils/music";
 
 const PITCH_MIN = 60;
 const PITCH_MAX = 84;
 const ROWS = PITCH_MAX - PITCH_MIN + 1; // 25
-const NATURAL = new Set([0, 2, 4, 5, 7, 9, 11]);
-const PITCH_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
 export function PianoRoll() {
-  const { score, currentTime } = useStore();
+  const score = usePrimaryScore();
+  const currentTime = useStore((s) => s.currentTime);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const notes = score?.tracks?.[0]?.notes ?? [];
@@ -52,7 +53,7 @@ export function PianoRoll() {
                 key={pitch}
                 className={[
                   "text-[10px] flex items-center justify-end pr-1 font-mono",
-                  NATURAL.has(pc) ? "text-slate-400" : "text-slate-600",
+                  NATURAL_PCS.has(pc) ? "text-slate-400" : "text-slate-600",
                   isC ? "border-t border-slate-600" : "",
                 ].join(" ")}
                 style={{ height: rowH }}
@@ -77,7 +78,7 @@ export function PianoRoll() {
                   y={i * rowH}
                   width={width}
                   height={rowH}
-                  fill={NATURAL.has(pc) ? "rgba(30,41,59,0.4)" : "rgba(15,23,42,0.6)"}
+                  fill={NATURAL_PCS.has(pc) ? "rgba(30,41,59,0.4)" : "rgba(15,23,42,0.6)"}
                 />
               );
             })}

@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { Play, Pause, Download } from "lucide-react";
-import { useStore } from "../store";
+import { useStore } from "@/store";
+import { useStoreShallow, usePrimaryScore } from "@/selectors";
 
 /**
  * 顶部"原音预听"条：仅播放用户上传的原始文件，跟 Mixer 引擎相互独立。
  * 同时把 currentTime 同步到 store 供 PianoRoll / Sky15 显示播放头。
  */
 export function AudioPlayer() {
-  const { audioUrl, score, file, setCurrentTime } = useStore();
+  const { audioUrl, file } = useStoreShallow((s) => ({ audioUrl: s.audioUrl, file: s.file }));
+  const setCurrentTime = useStore((s) => s.setCurrentTime);
+  const score = usePrimaryScore();
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
 

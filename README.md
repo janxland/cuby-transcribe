@@ -85,14 +85,30 @@ python ../benchmarks/run_bench.py
 
 ## 当前实现
 
-- ✅ Basic Pitch (ONNX) 音频转 MIDI
+- ✅ Basic Pitch (ONNX) 音频转 MIDI（复音）
+- ✅ **PYIN 单音旋律提取**（专攻人声主旋律 · 一指弹友好）
+- ✅ Demucs `htdemucs` / `htdemucs_6s` 人声/乐器分离
 - ✅ Krumhansl-Schmuckler 调性检测
-- ✅ 自动转 C 调（保留小调 → Am）
+- ✅ **最佳可弹奏调搜索**（自动选移调，给出推荐"升降调键"半音数）
+- ✅ 自动转 C 调（与"最佳可弹奏调"二选一）
 - ✅ 15 键映射（音域适配 + 变化音就近匹配 + 节奏量化）
-- ✅ 输出 CubyScore v1.1 JSON
-- ✅ React 现代前端（卷帘 + 15 键热力图）
-- ⏳ Demucs 音轨分离（后续）
+- ✅ **复音 voicing reducer（v2）**：保留旋律 + 根/三/五度 chord pad，按帧 ≤4 指
+- ✅ **和弦识别**（chroma + Viterbi · 24 大小三和弦模板），随调键同步移调
+- ✅ 输出 CubyScore v1.1 JSON（含 `arrangementMode` / `maxConcurrent` / `chords[]`）
+- ✅ 「一键 AI 扒谱」预设：去人声 → 复音 + 和弦 → 调键优化
+- ✅ React 现代前端（卷帘 + 15 键热力图 + 和弦时间线）
 - ⏳ Bull 队列 / WebSocket 推送（当前为轮询）
+
+### 一键 AI 扒谱（推荐）
+
+针对**流行歌曲在 15 键上还原成钢琴 cover**，点上传卡里的 **「一键 AI 扒谱 · 去人声 + 保留和弦 + 最佳调」** 按钮：
+- 分离人声，**在伴奏轨上跑 Basic Pitch**（保留和声）
+- **chord_detector** 识别 24 类大小三和弦序列（Am-F-C-G 等）
+- **voicing_reducer** 把每帧映射到 15 个白键，挑选 [旋律, 根音, 3 度, 5 度]，受 `maxSimultaneous`（默认 4）约束
+- 枚举 12 个移调候选，按"白键命中率 + 音域贴合 + 跨度"打分，挑出最适合 15 键的演奏调
+- 结果卡显示 `推荐升降调键 +N` + 和弦进行摘要，玩家把游戏内升降调键调到 N 即可
+
+> 旧版「单旋律」用法保留：把"编配"切到 **单音 · 仅主旋律**，等价于在人声轨上跑 PYIN。
 
 ## 目录
 

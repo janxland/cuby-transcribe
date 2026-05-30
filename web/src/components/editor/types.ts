@@ -3,7 +3,7 @@
  *  - 每个音符额外携带稳定 `id`，便于选择/撤销/比较；
  *  - 提交回 store 时由 `serialize()` 剥离 id 并取整 → 与外部 `CubyScore.Note` 等价。
  */
-import type { Note as ScoreNote } from "../../types";
+import type { Note as ScoreNote } from "@/types";
 
 export interface EditorNote {
   id: string;
