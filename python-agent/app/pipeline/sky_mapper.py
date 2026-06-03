@@ -1,8 +1,17 @@
-"""15 键映射：音域适配 + 变化音就近匹配 + 简化 + 量化。"""
+"""25 键映射：音域适配 + 简化 + 量化（默认保留半音）。
+
+v0.4 起产品键盘升级为 25 键（15 主键 + 10 半音键，覆盖 C4..C6 全部色彩音阶）。
+旧 API 名 `SKY_KEYS` / `constrain_to_sky` 仍保留以兼容外部调用，但语义已改为：
+  * 仅约束 MIDI 落在 [60, 84] 区间，**不再强行折叠到 C 大调白键**。
+  * 黑键解决（resolve_accidentals）改为可选，默认关闭。
+"""
 from __future__ import annotations
 from typing import List
 
-SKY_KEYS = [60, 62, 64, 65, 67, 69, 71, 72, 74, 76, 77, 79, 81, 83, 84]
+# 15 个主键（C4..C6 自然音）—— 仅供前端布局 / key_optimizer 评分用
+SKY_WHITE_KEYS = [60, 62, 64, 65, 67, 69, 71, 72, 74, 76, 77, 79, 81, 83, 84]
+# 25 键全集 = C4..C6 所有半音；这是新的合法 pitch 域
+SKY_KEYS = list(range(60, 85))  # [60, 61, ..., 84]
 SKY_SET = set(SKY_KEYS)
 SKY_MIN, SKY_MAX = 60, 84
 NATURAL_PCS = {0, 2, 4, 5, 7, 9, 11}
@@ -94,24 +103,35 @@ def quantize_rhythm(notes: List[dict], bpm: float, grid: int = 16) -> List[dict]
 
 
 def constrain_to_sky(notes: List[dict]) -> List[dict]:
-    """最终保证全部音符落在 SKY_KEYS 集合内。"""
+    """兜底：把音符限制在 25 键音域 [60, 84] 内（按八度折叠，不改色彩）。"""
     out = []
     for n in notes:
         p = n["pitch"]
-        if p in SKY_SET:
-            out.append(n)
-            continue
-        # 找最近
-        nearest = min(SKY_KEYS, key=lambda k: abs(k - p))
-        out.append({**n, "pitch": nearest})
+        while p < SKY_MIN:
+            p += 12
+        while p > SKY_MAX:
+            p -= 12
+        out.append({**n, "pitch": p})
     return out
 
 
-def process(notes: List[dict], bpm: float, simplify: bool = True, grid: int = 16) -> List[dict]:
+def process(
+    notes: List[dict],
+    bpm: float,
+    simplify: bool = True,
+    grid: int = 16,
+    force_natural: bool = False,
+) -> List[dict]:
+    """单音映射主入口。
+
+    force_natural=False（默认）：保留全部半音，输出可在 25 键键盘上直接弹奏。
+    force_natural=True：把变化音就近折叠到 C 大调白键（旧 15 键行为）。
+    """
     if not notes:
         return notes
     notes = adapt_range(notes)
-    notes = resolve_accidentals(notes)
+    if force_natural:
+        notes = resolve_accidentals(notes)
     if simplify:
         notes = simplify_melody(notes)
     notes = quantize_rhythm(notes, bpm, grid)

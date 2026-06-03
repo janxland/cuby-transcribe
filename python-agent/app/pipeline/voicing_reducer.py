@@ -16,12 +16,13 @@ from typing import List, Optional, Tuple, Set
 from loguru import logger
 
 
-# ── 区域定义 ───────────────────────────────────────────────
+# ── 区域定义（v0.4 25 键全色彩）─────────────────
 NATURAL_PCS: Set[int] = {0, 2, 4, 5, 7, 9, 11}
-RH_WHITES = [72, 74, 76, 77, 79, 81, 83, 84]      # 旋律右手 C5..C6
-LH_BASS_WHITES = [60, 62, 64, 65, 67, 69, 71]     # 根音左手 C4..B4
-LH_FILL_WHITES = [62, 64, 65, 67, 69, 71]         # 5 度 / 内声部 D4..B4
-SKY_WHITES = [60, 62, 64, 65, 67, 69, 71, 72, 74, 76, 77, 79, 81, 83, 84]
+# 旧 *_WHITES 名字保留，但现在指全色彩区间，以保留黑键
+RH_WHITES = list(range(72, 85))                # 旋律右手 C5..C6 全半音
+LH_BASS_WHITES = list(range(60, 72))           # 根音左手 C4..B4 全半音
+LH_FILL_WHITES = list(range(62, 72))           # 5 度 / 内声部 D4..B4 全半音
+SKY_WHITES = list(range(60, 85))               # 25 键全色彩集合
 SKY_SET = set(SKY_WHITES)
 
 # 力度（重要差距）
@@ -50,8 +51,9 @@ def _fold_to(pitch: int, allowed: List[int]) -> int:
 # ── 旋律预处理 ─────────────────────────────────────────────
 
 def _melody_to_white(notes: List[dict], bpm: float, grid: int) -> List[dict]:
-    """把旋律 note 列表整体折叠到 RH_WHITES，做轻量量化与去重叠。
+    """把旋律 note 列表折叠到 RH 区域（25 键下为 C5..C6 全半音），轻量量化与去重叠。
     保留每个 note 的原始时长（不再按 sub-beat 拆碎），只把 start/end 量化到网格。
+    函数名历史遗留（原本“折到白键”），现代码仅限定范围，不再改色彩。
     """
     if not notes:
         return []
