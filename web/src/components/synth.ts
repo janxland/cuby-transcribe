@@ -1,9 +1,10 @@
 /**
- * 15 键弹奏用的轻量合成器 —— 纯 WebAudio，不依赖采样资源。
- * 每个预设是一个"按 MIDI 音高一次性触发"的函数；外部只关心 play(preset, pitch)。
+ * editor 风格轻量合成器：
+ *  - 音色集合对齐 editor：triangle / sine / square / sawtooth / warm
+ *  - 每次触发都显式接收 note.duration 和 velocity，长音不再只是“亮得更久”
  */
 
-export type PresetId = "piano" | "musicbox" | "bell" | "pluck" | "pad";
+export type PresetId = "triangle" | "sine" | "square" | "sawtooth" | "warm";
 
 export interface Preset {
   id: PresetId;
@@ -12,24 +13,68 @@ export interface Preset {
 }
 
 export const PRESETS: Preset[] = [
-  { id: "piano",    label: "钢琴",   icon: "🎹" },
-  { id: "musicbox", label: "八音盒", icon: "🎶" },
-  { id: "bell",     label: "钟声",   icon: "🔔" },
-  { id: "pluck",    label: "拨弦",   icon: "🎸" },
-  { id: "pad",      label: "音垫",   icon: "🌫️" },
+  { id: "triangle", label: "默认", icon: "△" },
+  { id: "sine", label: "正弦", icon: "∿" },
+  { id: "square", label: "方波", icon: "⊓" },
+  { id: "sawtooth", label: "锯齿", icon: "⟍" },
+  { id: "warm", label: "温暖", icon: "◔" },
 ];
 
-// ─── AudioContext 单例 ────────────────────────────────────────
+interface Envelope {
+  attack: number;
+  decay: number;
+  sustain: number;
+  release: number;
+  peak: number;
+  gainScale: number;
+  osc: OscillatorType;
+  detunes?: number[];
+  longDecay: number;
+  brightness: [number, number];
+  q?: number;
+}
+
+const ENVELOPES: Record<PresetId, Envelope> = {
+  triangle: {
+    osc: "triangle", attack: 0.01, decay: 0.1, sustain: 0.34, release: 1.0,
+    peak: 1.0, gainScale: 0.31, longDecay: 0.52, brightness: [8.5, 2.6], q: 1.8,
+  },
+  sine: {
+    osc: "sine", attack: 0.01, decay: 0.1, sustain: 0.32, release: 1.05,
+    peak: 1.0, gainScale: 0.28, longDecay: 0.58, brightness: [6.5, 2.8], q: 1.2,
+  },
+  square: {
+    osc: "square", attack: 0.008, decay: 0.09, sustain: 0.26, release: 0.9,
+    peak: 0.92, gainScale: 0.21, longDecay: 0.46, brightness: [7.2, 2.1], q: 2.4,
+  },
+  sawtooth: {
+    osc: "sawtooth", attack: 0.008, decay: 0.08, sustain: 0.23, release: 0.82,
+    peak: 0.88, gainScale: 0.2, longDecay: 0.42, brightness: [7.8, 1.9], q: 2.2,
+  },
+  warm: {
+    osc: "triangle", attack: 0.03, decay: 0.2, sustain: 0.45, release: 1.45,
+    peak: 0.95, gainScale: 0.29, detunes: [-4, 0, 4], longDecay: 0.64, brightness: [6.8, 2.4], q: 1.5,
+  },
+};
+
 let _ctx: AudioContext | null = null;
 let _master: GainNode | null = null;
+let _compressor: DynamicsCompressorNode | null = null;
 
 function ctx(): AudioContext {
   if (!_ctx) {
     const AC = window.AudioContext || (window as any).webkitAudioContext;
     _ctx = new AC();
+    _compressor = _ctx.createDynamicsCompressor();
+    _compressor.threshold.value = -18;
+    _compressor.knee.value = 18;
+    _compressor.ratio.value = 3;
+    _compressor.attack.value = 0.003;
+    _compressor.release.value = 0.18;
     _master = _ctx.createGain();
-    _master.gain.value = 0.7;
-    _master.connect(_ctx.destination);
+    _master.gain.value = 1.15;
+    _master.connect(_compressor);
+    _compressor.connect(_ctx.destination);
   }
   return _ctx;
 }
@@ -52,140 +97,72 @@ export function getSynthVolume(): number {
   return master().gain.value;
 }
 
-// ─── MIDI → Hz ────────────────────────────────────────────────
 const midiToHz = (m: number) => 440 * Math.pow(2, (m - 69) / 12);
 
-// ─── 音色实现 ─────────────────────────────────────────────────
-function playPiano(c: AudioContext, dst: AudioNode, freq: number, t0: number) {
-  // 多谐波叠加 + 快速衰减；模拟敲击式
-  const dur = 1.8;
-  const g = c.createGain();
-  g.gain.setValueAtTime(0, t0);
-  g.gain.linearRampToValueAtTime(0.5, t0 + 0.005);
-  g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
-  g.connect(dst);
+function scheduleVoice(
+  c: AudioContext,
+  dst: AudioNode,
+  freq: number,
+  t0: number,
+  durationSec: number,
+  velocity: number,
+  cfg: Envelope,
+): void {
+  const noteDur = Math.max(0.08, Math.min(12, durationSec));
+  const amp = Math.max(0.03, Math.min(1, velocity / 127)) * cfg.gainScale;
+  const peak = amp * cfg.peak;
+  const sustain = Math.max(0.0001, peak * cfg.sustain);
+  const attackEnd = t0 + cfg.attack;
+  const decayEnd = attackEnd + cfg.decay;
+  const releaseStart = Math.max(t0 + noteDur, decayEnd);
+  const stopAt = releaseStart + cfg.release + 0.05;
+  const heldTail = Math.max(0.0001, sustain * cfg.longDecay);
+  const longDecayEnd = Math.max(decayEnd + 0.06, releaseStart);
 
-  const partials: Array<[number, number]> = [
-    [1, 1.0], [2, 0.5], [3, 0.25], [4, 0.18], [6, 0.08],
-  ];
-  for (const [n, amp] of partials) {
-    const o = c.createOscillator();
-    o.type = "sine";
-    o.frequency.value = freq * n;
-    const og = c.createGain();
-    og.gain.value = amp;
-    o.connect(og).connect(g);
-    o.start(t0);
-    o.stop(t0 + dur + 0.05);
+  const detunes = cfg.detunes?.length ? cfg.detunes : [0];
+  const mix = 1 / detunes.length;
+  const filter = c.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.Q.value = cfg.q ?? 1.5;
+  filter.frequency.setValueAtTime(Math.max(300, freq * cfg.brightness[0]), t0);
+  filter.frequency.exponentialRampToValueAtTime(
+    Math.max(180, freq * cfg.brightness[1]),
+    Math.max(decayEnd + 0.03, releaseStart),
+  );
+
+  const gain = c.createGain();
+  gain.gain.setValueAtTime(0.0001, t0);
+  gain.gain.linearRampToValueAtTime(Math.max(0.0001, peak), attackEnd);
+  gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, sustain), decayEnd);
+  gain.gain.exponentialRampToValueAtTime(heldTail, longDecayEnd);
+  gain.gain.setValueAtTime(heldTail, releaseStart);
+  gain.gain.exponentialRampToValueAtTime(0.0001, releaseStart + cfg.release);
+  filter.connect(gain).connect(dst);
+
+  for (const detune of detunes) {
+    const osc = c.createOscillator();
+    osc.type = cfg.osc;
+    osc.frequency.setValueAtTime(freq, t0);
+    osc.detune.setValueAtTime(detune, t0);
+
+    const voiceGain = c.createGain();
+    voiceGain.gain.value = mix;
+    osc.connect(voiceGain).connect(filter);
+    osc.start(t0);
+    osc.stop(stopAt);
   }
 }
 
-function playMusicBox(c: AudioContext, dst: AudioNode, freq: number, t0: number) {
-  const dur = 2.5;
-  const g = c.createGain();
-  g.gain.setValueAtTime(0, t0);
-  g.gain.linearRampToValueAtTime(0.45, t0 + 0.003);
-  g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
-  g.connect(dst);
-
-  // 高谐波突出的金属感
-  const partials: Array<[number, number]> = [
-    [1, 1.0], [3, 0.7], [6, 0.4], [9, 0.2],
-  ];
-  for (const [n, amp] of partials) {
-    const o = c.createOscillator();
-    o.type = "sine";
-    o.frequency.value = freq * n;
-    const og = c.createGain();
-    og.gain.value = amp;
-    o.connect(og).connect(g);
-    o.start(t0);
-    o.stop(t0 + dur + 0.05);
-  }
-}
-
-function playBell(c: AudioContext, dst: AudioNode, freq: number, t0: number) {
-  const dur = 3.5;
-  const g = c.createGain();
-  g.gain.setValueAtTime(0, t0);
-  g.gain.linearRampToValueAtTime(0.4, t0 + 0.01);
-  g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
-  g.connect(dst);
-
-  // 不和谐分音 → 钟声
-  const partials: Array<[number, number]> = [
-    [0.5, 0.5], [1, 1.0], [2.4, 0.55], [4.2, 0.3], [5.6, 0.18],
-  ];
-  for (const [n, amp] of partials) {
-    const o = c.createOscillator();
-    o.type = "sine";
-    o.frequency.value = freq * n;
-    const og = c.createGain();
-    og.gain.value = amp;
-    o.connect(og).connect(g);
-    o.start(t0);
-    o.stop(t0 + dur + 0.05);
-  }
-}
-
-function playPluck(c: AudioContext, dst: AudioNode, freq: number, t0: number) {
-  // 单震荡 + 低通包络 → 拨弦感
-  const dur = 1.2;
-  const o = c.createOscillator();
-  o.type = "sawtooth";
-  o.frequency.value = freq;
-
-  const lp = c.createBiquadFilter();
-  lp.type = "lowpass";
-  lp.Q.value = 6;
-  lp.frequency.setValueAtTime(freq * 6, t0);
-  lp.frequency.exponentialRampToValueAtTime(Math.max(200, freq), t0 + dur);
-
-  const g = c.createGain();
-  g.gain.setValueAtTime(0, t0);
-  g.gain.linearRampToValueAtTime(0.35, t0 + 0.005);
-  g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
-
-  o.connect(lp).connect(g).connect(dst);
-  o.start(t0);
-  o.stop(t0 + dur + 0.05);
-}
-
-function playPad(c: AudioContext, dst: AudioNode, freq: number, t0: number) {
-  // 慢起慢落 + 失谐叠加
-  const dur = 2.5;
-  const g = c.createGain();
-  g.gain.setValueAtTime(0, t0);
-  g.gain.linearRampToValueAtTime(0.3, t0 + 0.25);
-  g.gain.setValueAtTime(0.3, t0 + dur - 0.5);
-  g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
-  g.connect(dst);
-
-  for (const detune of [-7, 0, 7]) {
-    const o = c.createOscillator();
-    o.type = "triangle";
-    o.frequency.value = freq;
-    o.detune.value = detune;
-    const og = c.createGain();
-    og.gain.value = 0.5;
-    o.connect(og).connect(g);
-    o.start(t0);
-    o.stop(t0 + dur + 0.05);
-  }
-}
-
-const IMPL: Record<PresetId, (c: AudioContext, dst: AudioNode, f: number, t: number) => void> = {
-  piano: playPiano,
-  musicbox: playMusicBox,
-  bell: playBell,
-  pluck: playPluck,
-  pad: playPad,
-};
-
-/** 立即触发一个音符。返回 Promise 仅用于 ensureSynthAudio。 */
-export async function playNote(preset: PresetId, midi: number): Promise<void> {
+/** 立即触发一个音符，默认给一个短音时值。 */
+export async function playNote(
+  preset: PresetId,
+  midi: number,
+  durationSec = 0.35,
+  velocity = 96,
+): Promise<void> {
   await ensureSynthAudio();
   const c = ctx();
-  const f = midiToHz(midi);
-  IMPL[preset](c, master(), f, c.currentTime);
+  const freq = midiToHz(midi);
+  const cfg = ENVELOPES[preset];
+  scheduleVoice(c, master(), freq, c.currentTime, durationSec, velocity, cfg);
 }

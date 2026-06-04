@@ -1,18 +1,20 @@
 import { useState } from "react";
 import { useStore } from "@/store";
 import { stemMeta } from "@/stems";
-import { usePrimaryScore, useScoreList, useStoreShallow } from "@/selectors";
+import { usePrimaryMeta, usePrimaryScore, useScoreList, useStoreShallow } from "@/selectors";
 import { PianoRoll } from "./PianoRoll";
 import { Sky15Keys } from "./Sky15Keys";
 import { StemsPanel } from "./StemsPanel";
 import { ScoreEditor } from "./editor";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { MixerProvider } from "./mixer";
+import { toEditorScore } from "@/utils/editorExport";
 
 type Tab = "stems" | "sky" | "edit" | "roll" | "json";
 
 export function ScoreViewer() {
   const score = usePrimaryScore();
+  const meta = usePrimaryMeta();
   const { stems, activeStems } = useStoreShallow((s) => ({ stems: s.stems, activeStems: s.activeStems }));
   const toggleActiveStem = useStore((s) => s.toggleActiveStem);
   const scoreList = useScoreList();
@@ -110,7 +112,7 @@ export function ScoreViewer() {
         {tab === "roll" && (score ? <div className="p-3"><ErrorBoundary name="PianoRoll"><PianoRoll /></ErrorBoundary></div> : <Empty />)}
         {tab === "json" && score && (
           <pre className="m-3 rounded-lg bg-slate-950 border border-slate-800 p-4 text-xs font-mono text-slate-300 whitespace-pre-wrap break-all">
-            {JSON.stringify(score, null, 2)}
+            {JSON.stringify(toEditorScore(score, meta ?? undefined), null, 2)}
           </pre>
         )}
       </div>

@@ -45,6 +45,37 @@ cd web && npm install && npm run dev
 # → http://localhost:5173 (自动代理 /api → Node)
 ```
 
+### 方式三：macOS 一键本地启动（非 Docker）
+
+项目根目录执行：
+
+```bash
+./start-all.sh
+```
+
+首次运行会自动完成：
+- `python-agent` 创建 `.venv` 并安装 `requirements.txt`
+- `node-backend` / `web` 在缺少 `node_modules` 时自动 `npm install`
+
+启动后查看：
+- Web: `http://localhost:5173`
+- Node: `http://localhost:3000/health`
+- Agent: `http://localhost:8000/docs`
+
+日志目录：`.logs/`
+
+停止全部服务：
+
+```bash
+./stop-all.sh
+```
+
+如果你改了依赖想强制重装：
+
+```bash
+FORCE_INSTALL=1 ./start-all.sh
+```
+
 ## API
 
 ```bash

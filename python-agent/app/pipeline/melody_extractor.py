@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+from bisect import bisect_right
 from typing import List, Optional, Tuple
 from loguru import logger
 
@@ -22,10 +23,12 @@ DEFAULT_HOP_LENGTH = 256   # 在 22050Hz 下 ≈ 11.6ms / 帧
 DEFAULT_VOICED_PROB = 0.55 # 浊音概率门槛
 DEFAULT_MIN_NOTE_SEC = 0.10
 DEFAULT_MAX_PITCH_GAP = 0.5  # 同一音符内允许的最大半音漂移（中位数稳定段判定）
+DEFAULT_MERGE_GAP_SEC = 0.08
+DEFAULT_ONSET_EDGE_SEC = 0.05
 
 
-def _pyin_curve(audio_path: str) -> Tuple["np.ndarray", "np.ndarray", float]:
-    """返回 (f0_hz, voiced_prob, frame_dt)。无声/未检测为 NaN。"""
+def _analyze_audio(audio_path: str) -> Tuple["np.ndarray", "np.ndarray", float, List[float]]:
+    """返回 (f0_hz, voiced_prob, frame_dt, onset_times)。"""
     import numpy as np
     import librosa
 
@@ -39,10 +42,18 @@ def _pyin_curve(audio_path: str) -> Tuple["np.ndarray", "np.ndarray", float]:
         hop_length=DEFAULT_HOP_LENGTH,
         fill_na=np.nan,
     )
+    onset_frames = librosa.onset.onset_detect(
+        y=y,
+        sr=sr,
+        hop_length=DEFAULT_HOP_LENGTH,
+        units="frames",
+        backtrack=False,
+    )
+    onset_times = librosa.frames_to_time(onset_frames, sr=sr, hop_length=DEFAULT_HOP_LENGTH).tolist()
     frame_dt = DEFAULT_HOP_LENGTH / sr
     # 浊音概率：把 NaN 视作 0
     voiced_prob = np.nan_to_num(voiced_prob, nan=0.0)
-    return f0, voiced_prob, frame_dt
+    return f0, voiced_prob, frame_dt, onset_times
 
 
 def _f0_to_midi(f0_hz: float) -> float:
@@ -107,19 +118,57 @@ def _segment(
             })
         i = end if end > i else i + 1
 
-    # 合并相邻同音的细微间隙（< 80ms）
-    if notes:
-        merged = [dict(notes[0])]
-        for nt in notes[1:]:
-            last = merged[-1]
-            if nt["pitch"] == last["pitch"] and (nt["start"] - last["end"]) < 0.08:
-                last["end"] = nt["end"]
-                last["velocity"] = max(last["velocity"], nt["velocity"])
-            else:
-                merged.append(dict(nt))
-        notes = merged
-
     return notes
+
+
+def _has_onset_between(onset_times: List[float], start: float, end: float) -> bool:
+    if not onset_times or end <= start:
+        return False
+    idx = bisect_right(onset_times, start)
+    return idx < len(onset_times) and onset_times[idx] < end
+
+
+def _split_by_onsets(notes: List[dict], onset_times: List[float], min_note_sec: float) -> List[dict]:
+    if not notes or not onset_times:
+        return notes
+    out: List[dict] = []
+    edge = min(DEFAULT_ONSET_EDGE_SEC, max(0.02, min_note_sec * 0.5))
+    for note in notes:
+        start = float(note["start"])
+        end = float(note["end"])
+        cuts = [t for t in onset_times if (start + edge) < t < (end - edge)]
+        if not cuts:
+            out.append(note)
+            continue
+        seg_start = start
+        for cut in cuts:
+            if cut - seg_start >= min_note_sec:
+                out.append({**note, "start": seg_start, "end": cut})
+                seg_start = cut
+        if end - seg_start >= min_note_sec:
+            out.append({**note, "start": seg_start, "end": end})
+        elif out:
+            out[-1]["end"] = max(float(out[-1]["end"]), end)
+    return out
+
+
+def _merge_same_pitch(notes: List[dict], onset_times: List[float]) -> List[dict]:
+    if not notes:
+        return notes
+    merged = [dict(notes[0])]
+    for nt in notes[1:]:
+        last = merged[-1]
+        gap = float(nt["start"]) - float(last["end"])
+        if (
+            nt["pitch"] == last["pitch"]
+            and gap < DEFAULT_MERGE_GAP_SEC
+            and not _has_onset_between(onset_times, float(last["end"]) - 1e-4, float(nt["start"]) + 1e-4)
+        ):
+            last["end"] = nt["end"]
+            last["velocity"] = max(last["velocity"], nt["velocity"])
+        else:
+            merged.append(dict(nt))
+    return merged
 
 
 def detect_bpm_with_pyin_byproduct(audio_path: str) -> float:
@@ -145,10 +194,12 @@ def extract(
     返回 (notes, bpm)。
     """
     logger.info(f"[melody-pyin] start: {audio_path}")
-    f0, vp, dt = _pyin_curve(audio_path)
+    f0, vp, dt, onset_times = _analyze_audio(audio_path)
     notes = _segment(f0, vp, dt, voiced_thresh, min_note_sec, DEFAULT_MAX_PITCH_GAP)
+    notes = _split_by_onsets(notes, onset_times, min_note_sec)
+    notes = _merge_same_pitch(notes, onset_times)
     if bpm is None:
         bpm = detect_bpm_with_pyin_byproduct(audio_path)
-    logger.info(f"[melody-pyin] done: {len(notes)} notes, bpm={bpm:.1f}")
     notes.sort(key=lambda n: n["start"])
+    logger.info(f"[melody-pyin] done: {len(notes)} notes, onsets={len(onset_times)}, bpm={bpm:.1f}")
     return notes, float(bpm)

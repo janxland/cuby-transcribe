@@ -19,6 +19,7 @@ from . import (
 )
 
 PITCH_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+MELODY_VELOCITY_FLOOR = 90
 
 
 STEMS_ROOT = os.environ.get("STEMS_DIR", "/tmp/cuby-stems")
@@ -31,6 +32,60 @@ def _duration(path: str) -> float:
         return float(librosa.get_duration(path=path))
     except Exception:
         return 0.0
+
+
+def _to_score_note(n: dict) -> Note:
+    return Note(
+        pitch=n["pitch"],
+        time=round(n["start"], 4),
+        duration=round(n["end"] - n["start"], 4),
+        velocity=n.get("velocity", 90),
+    )
+
+
+def _build_tracks(notes: list[dict], arrangement_mode: str) -> list[Track]:
+    if arrangement_mode != "polyphonic":
+        return [
+            Track(
+                id="track_1",
+                name="Melody",
+                instrument="Grand Piano",
+                notes=[_to_score_note(n) for n in notes],
+            )
+        ]
+
+    melody_notes = [n for n in notes if n.get("velocity", 90) >= MELODY_VELOCITY_FLOOR]
+    chord_notes = [n for n in notes if n.get("velocity", 90) < MELODY_VELOCITY_FLOOR]
+    if not melody_notes or not chord_notes:
+        return [
+            Track(
+                id="track_1",
+                name="Melody",
+                instrument="Grand Piano",
+                notes=[_to_score_note(n) for n in notes],
+            ),
+            Track(
+                id="track_2",
+                name="Chord",
+                instrument="Grand Piano",
+                notes=[],
+            ),
+        ]
+
+    return [
+        Track(
+            id="track_1",
+            name="Melody",
+            instrument="Grand Piano",
+            notes=[_to_score_note(n) for n in melody_notes],
+        ),
+        Track(
+            id="track_2",
+            name="Chord",
+            instrument="Grand Piano",
+            notes=[_to_score_note(n) for n in chord_notes],
+        ),
+    ]
 
 
 def run(audio_path: str, options: ProcessOptions, task_id: str | None = None) -> dict:
@@ -88,7 +143,9 @@ def run(audio_path: str, options: ProcessOptions, task_id: str | None = None) ->
 
     # —— 选择旋律提取算法 ——
     # melodyMode='vocal' 且当前扒的是人声轨 → 走 PYIN 单音；否则回退 Basic Pitch
-    use_pyin = options.melodyMode == "vocal" and transcribed_stem == "vocals"
+    # auto 模式下只要目标 stem 是 vocals，也强制走 PYIN。
+    # Basic Pitch 对人声容易产出泛音碎片；这会直接把 editor 里的谱子打乱。
+    use_pyin = transcribed_stem == "vocals" and options.melodyMode in {"auto", "vocal"}
     melody_algo = "pyin" if use_pyin else "basic_pitch"
     logger.info(f"[stage] transcribe ({transcribed_stem}) algo={melody_algo} bpm={precomputed_bpm}")
     if use_pyin:
@@ -213,22 +270,7 @@ def run(audio_path: str, options: ProcessOptions, task_id: str | None = None) ->
             bpm=round(bpm, 2),
             keySignature=final_key_sig,
         ),
-        tracks=[
-            Track(
-                id="track_1",
-                name="Melody",
-                instrument="sky_15",
-                notes=[
-                    Note(
-                        pitch=n["pitch"],
-                        time=round(n["start"], 4),
-                        duration=round(n["end"] - n["start"], 4),
-                        velocity=n.get("velocity", 90),
-                    )
-                    for n in sky_notes
-                ],
-            )
-        ],
+        tracks=_build_tracks(sky_notes, arrangement_mode),
     )
 
     meta = Metadata(

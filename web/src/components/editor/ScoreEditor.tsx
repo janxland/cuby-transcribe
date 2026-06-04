@@ -8,7 +8,7 @@
  *
  *  - 切换编辑的 stem：以 `key={editingStem}` 强制重挂 hook，自然得到全新历史栈，避免双向同步。
  *  - 播放头：来自全局 mixer（与 Sky15 / StemsPanel 共享同一时钟）。
- *  - 试听：与 Sky15 共用 `synth.ts`，被编辑音符所属 stem 的音色暂未细分，统一回退到 "piano"。
+ *  - 试听：与 Sky15 共用 `synth.ts`，沿用 editor 风格 envelope，并按音符真实时长触发。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStoreShallow } from "@/selectors";
@@ -87,8 +87,8 @@ function EditorBody({
   const api = useScoreEditor(initialNotes, writeBack);
 
   // ── 试听音色：取所属 stem 的偏好；编辑器场景统一回退 piano ───
-  const audition = useCallback((pitch: number, _velocity = 90) => {
-    void playNote("piano", pitch);
+  const audition = useCallback((pitch: number, velocity = 90, duration = 0.35) => {
+    void playNote("triangle", pitch, duration, velocity);
   }, []);
 
   // ── 视口缩放 ─────────────────────────────────────────────
@@ -127,7 +127,7 @@ function EditorBody({
         onDeleteSelected={() => { api.pushHistory(); api.deleteIds(api.selection); }}
         onAuditionSelected={() => {
           const selected = api.notes.filter((n) => api.selection.has(n.id));
-          selected.forEach((n, i) => window.setTimeout(() => audition(n.pitch, n.velocity), i * 60));
+          selected.forEach((n, i) => window.setTimeout(() => audition(n.pitch, n.velocity, n.duration), i * 60));
         }}
         stems={stemItems}
         editingStem={editingStem}

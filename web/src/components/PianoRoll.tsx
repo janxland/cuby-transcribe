@@ -12,7 +12,12 @@ export function PianoRoll() {
   const currentTime = useStore((s) => s.currentTime);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const notes = score?.tracks?.[0]?.notes ?? [];
+  const notes = useMemo(
+    () => (score?.tracks ?? []).flatMap((track, trackIndex) =>
+      (track.notes ?? []).map((note) => ({ ...note, trackIndex })),
+    ),
+    [score],
+  );
   const duration = useMemo(() => {
     if (!notes.length) return 1;
     return Math.max(...notes.map((n) => n.time + n.duration)) + 0.5;
@@ -114,7 +119,7 @@ export function PianoRoll() {
                   width={w}
                   height={rowH - 2}
                   rx={3}
-                  fill={active ? "#a78bfa" : "#6366f1"}
+                  fill={active ? "#a78bfa" : (n.trackIndex === 0 ? "#6366f1" : "#f59e0b")}
                   opacity={active ? 1 : 0.85}
                 />
               );

@@ -5,6 +5,9 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional, Tuple
 from loguru import logger
 
+MIN_NOTE_SEC = 0.05
+MIN_VELOCITY = 18
+
 
 def detect_bpm(audio_path: str) -> float:
     """独立的 BPM 探测，供 processor 在分离阶段后台并行调用。"""
@@ -53,11 +56,18 @@ def transcribe(audio_path: str, bpm: Optional[float] = None) -> Tuple[List[dict]
     for start, end, pitch, velocity, _pitch_bends in note_events:
         if end <= start:
             continue
+        dur = float(end - start)
+        vel = max(1, min(127, int(velocity * 127) if velocity <= 1 else int(velocity)))
+        # 过滤极短/极弱的毛刺音，减少 Basic Pitch 在残留伴奏和泛音上的碎片化输出。
+        if dur < MIN_NOTE_SEC:
+            continue
+        if vel < MIN_VELOCITY and dur < 0.09:
+            continue
         notes.append({
             "pitch": int(pitch),
             "start": float(start),
             "end": float(end),
-            "velocity": max(1, min(127, int(velocity * 127) if velocity <= 1 else int(velocity))),
+            "velocity": vel,
         })
 
     if bpm is None:

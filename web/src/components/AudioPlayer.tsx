@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Play, Pause, Download } from "lucide-react";
 import { useStore } from "@/store";
-import { useStoreShallow, usePrimaryScore } from "@/selectors";
+import { useStoreShallow, usePrimaryMeta, usePrimaryScore } from "@/selectors";
+import { toEditorScore } from "@/utils/editorExport";
 
 /**
  * 顶部"原音预听"条：仅播放用户上传的原始文件，跟 Mixer 引擎相互独立。
@@ -11,6 +12,7 @@ export function AudioPlayer() {
   const { audioUrl, file } = useStoreShallow((s) => ({ audioUrl: s.audioUrl, file: s.file }));
   const setCurrentTime = useStore((s) => s.setCurrentTime);
   const score = usePrimaryScore();
+  const meta = usePrimaryMeta();
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
 
@@ -42,7 +44,8 @@ export function AudioPlayer() {
   const downloadScore = () => {
     if (!score) return;
     const name = (score.meta?.title || file?.name || "score") + ".cuby.json";
-    const blob = new Blob([JSON.stringify(score, null, 2)], { type: "application/json" });
+    const exportScore = toEditorScore(score, meta ?? undefined);
+    const blob = new Blob([JSON.stringify(exportScore, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = name;

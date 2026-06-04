@@ -46,7 +46,7 @@ export function useScoreList(): { stem: string; noteCount: number }[] {
   return useMemo(
     () => Object.entries(scores).map(([stem, e]) => ({
       stem,
-      noteCount: e.score.tracks?.[0]?.notes?.length ?? 0,
+      noteCount: (e.score.tracks ?? []).reduce((sum, track) => sum + (track.notes?.length ?? 0), 0),
     })),
     [scores],
   );

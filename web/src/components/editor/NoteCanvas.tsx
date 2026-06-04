@@ -27,7 +27,7 @@ interface Props {
   tool: Tool;
   duration: number;       // 谱面总时长（秒，用于画网格 / 容器宽）
   playheadTime?: number;
-  onAuditionNote?: (pitch: number, velocity: number) => void;
+  onAuditionNote?: (pitch: number, velocity: number, duration: number) => void;
 }
 
 type Interaction =
@@ -102,7 +102,7 @@ export function NoteCanvas({
       if (!api.selection.has(hit.id)) api.select([hit.id], "replace");
 
       const note = api.notes.find((n) => n.id === hit.id)!;
-      onAuditionNote?.(note.pitch, note.velocity);
+      onAuditionNote?.(note.pitch, note.velocity, note.duration);
       api.pushHistory();
       const targets = api.selection.has(hit.id) && api.selection.size > 1
         ? [...api.selection]
@@ -121,7 +121,7 @@ export function NoteCanvas({
       const t0 = snapTime(xToTime(x, viewport), bpm, grid);
       api.pushHistory();
       const id = api.addNote({ pitch, time: t0, duration: step, velocity: 90 });
-      onAuditionNote?.(pitch, 90);
+      onAuditionNote?.(pitch, 90, step);
       interactionRef.current = { kind: "create", id, anchorTime: t0 };
     }
   };

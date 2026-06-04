@@ -68,7 +68,7 @@ const SHIFT_KEY_TO_BLACK: Record<string, number> = (() => {
   return m;
 })();
 
-interface SchedNote { time: number; duration: number; pitch: number; stem: string; }
+interface SchedNote { time: number; duration: number; pitch: number; velocity: number; stem: string; }
 
 /** 25 键键盘 = score 播放器（多 stem 合流，跟随 mixer 时钟） */
 export function Sky15Keys() {
@@ -78,7 +78,7 @@ export function Sky15Keys() {
   const mixer = useMixerOptional();
 
   const [presetMap, setPresetMap] = useState<Record<string, PresetId>>({});
-  const presetOf = useCallback((stem: string): PresetId => presetMap[stem] ?? "piano", [presetMap]);
+  const presetOf = useCallback((stem: string): PresetId => presetMap[stem] ?? "triangle", [presetMap]);
   /** 视觉脉冲集合：以 pitch 为 key（覆盖 25 键全部） */
   const [pressed, setPressed] = useState<Set<number>>(new Set());
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -86,8 +86,19 @@ export function Sky15Keys() {
   const stream: SchedNote[] = useMemo(() => {
     const out: SchedNote[] = [];
     for (const stem of activeStems) {
-      const ns: Note[] = scores[stem]?.score?.tracks?.[0]?.notes ?? [];
-      for (const n of ns) out.push({ time: n.time, duration: n.duration, pitch: n.pitch, stem });
+      const tracks = scores[stem]?.score?.tracks ?? [];
+      for (const track of tracks) {
+        const ns: Note[] = track.notes ?? [];
+        for (const n of ns) {
+          out.push({
+            time: n.time,
+            duration: n.duration,
+            pitch: n.pitch,
+            velocity: n.velocity,
+            stem,
+          });
+        }
+      }
     }
     out.sort((a, b) => a.time - b.time);
     return out;
@@ -112,17 +123,18 @@ export function Sky15Keys() {
     return set;
   }, [stream, playheadTime, followMixer]);
 
-  const fireNote = useCallback((pitch: number, preset: PresetId) => {
-    void playNote(preset, pitch);
+  const fireNote = useCallback((pitch: number, preset: PresetId, duration = 0.35, velocity = 96) => {
+    void playNote(preset, pitch, duration, velocity);
     setPressed((s) => { const n = new Set(s); n.add(pitch); return n; });
+    const holdMs = Math.max(180, Math.min(1400, duration * 1000));
     window.setTimeout(() => {
       setPressed((s) => { const n = new Set(s); n.delete(pitch); return n; });
-    }, 180);
+    }, holdMs);
   }, []);
 
-  const manualPreset: PresetId = activeStems[0] ? presetOf(activeStems[0]) : "piano";
+  const manualPreset: PresetId = activeStems[0] ? presetOf(activeStems[0]) : "triangle";
   const triggerPitch = useCallback(
-    (pitch: number) => fireNote(pitch, manualPreset),
+    (pitch: number) => fireNote(pitch, manualPreset, 0.4, 108),
     [fireNote, manualPreset],
   );
 
@@ -173,7 +185,7 @@ export function Sky15Keys() {
       let i = cursorRef.current;
       while (i < stream.length && stream[i].time <= t) {
         const n = stream[i];
-        if (n.time > last) fireNote(n.pitch, presetOf(n.stem));
+        if (n.time > last) fireNote(n.pitch, presetOf(n.stem), n.duration, n.velocity);
         i++;
       }
       cursorRef.current = i;
@@ -203,7 +215,7 @@ export function Sky15Keys() {
           ) : (
             activeStems.map((stem, i) => {
               const sm = stemMeta(stem);
-              const noteCount = scores[stem]?.score?.tracks?.[0]?.notes?.length ?? 0;
+              const noteCount = (scores[stem]?.score?.tracks ?? []).reduce((sum, track) => sum + (track.notes?.length ?? 0), 0);
               return (
                 <StemPresetChip
                   key={stem}
