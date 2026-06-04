@@ -1,10 +1,20 @@
+import { useEffect } from "react";
 import { Music2 } from "lucide-react";
 import { Uploader } from "./components/Uploader";
 import { ProgressCard } from "./components/ProgressCard";
 import { AudioPlayer } from "./components/AudioPlayer";
 import { ScoreViewer } from "./components/ScoreViewer";
+import { HeaderControls } from "./components/HeaderControls";
+import { useStore } from "@/store";
+import { setSynthVolume } from "@/components/synth";
 
 export default function App() {
+  // 启动时把已持久化的音量值套到合成器（master gain）
+  const masterVolume = useStore((s) => s.masterVolume);
+  useEffect(() => {
+    setSynthVolume(masterVolume);
+  }, [masterVolume]);
+
   return (
     <div className="h-screen flex flex-col bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 overflow-hidden">
       {/* 顶栏 */}
@@ -16,7 +26,8 @@ export default function App() {
           <h1 className="text-sm font-semibold">Cuby Transcribe</h1>
           <p className="text-[10px] text-slate-400">AI 扒谱 · 光遇 15 键 · Demucs + Basic Pitch</p>
         </div>
-        <span className="ml-auto text-[10px] text-slate-500 font-mono">v0.3 · workstation</span>
+        <HeaderControls />
+        <span className="ml-3 text-[10px] text-slate-500 font-mono">v0.3 · workstation</span>
       </header>
 
       {/* 主体：左侧边栏 + 右编辑区，共同占满剩余视口 */}

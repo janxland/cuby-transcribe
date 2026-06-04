@@ -1,12 +1,16 @@
 export type TaskStatus = "queued" | "processing" | "completed" | "failed";
 
 export interface TaskOptions {
+  /** 'raw' = 100% 保真多 stem 多 track（默认）/ 'arranged' = 旧版光遇键盘适配 */
+  fidelityMode?: "raw" | "arranged";
   transposeToC?: boolean;
   quantizeGrid?: 8 | 16;
   simplifyMelody?: boolean;
-  separationMode?: "none" | "vocals" | "4stems";
+  separationMode?: "none" | "vocals" | "4stems" | "6stems";
   transcribeStem?:
-    | "original" | "vocals" | "no_vocals" | "drums" | "bass" | "other";
+    | "original" | "vocals" | "no_vocals" | "drums" | "bass" | "other" | "piano" | "guitar";
+  /** 用户希望保留的 stem 列表 */
+  stems?: string[];
   /** v2: polyphonic 保留和弦 / monophonic 单音 */
   arrangementMode?: "polyphonic" | "monophonic";
   /** 同帧最大并发音数（polyphonic 模式生效，建议 2-4） */

@@ -28,9 +28,20 @@ check_service_not_running() {
     local pid
     pid="$(cat "$pid_file")"
     if [[ -n "$pid" ]] && is_running "$pid"; then
-      echo "[error] $name is already running (pid=$pid)."
-      echo "        run ./stop-all.sh first, then retry."
-      exit 1
+      echo "[cleanup] stopping previous $name (pid=$pid)"
+      kill "$pid" >/dev/null 2>&1 || true
+
+      for _ in {1..20}; do
+        if ! is_running "$pid"; then
+          break
+        fi
+        sleep 0.2
+      done
+
+      if is_running "$pid"; then
+        echo "[cleanup] force killing previous $name (pid=$pid)"
+        kill -9 "$pid" >/dev/null 2>&1 || true
+      fi
     fi
     rm -f "$pid_file"
   fi

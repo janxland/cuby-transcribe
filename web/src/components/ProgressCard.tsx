@@ -40,9 +40,22 @@ export function ProgressCard() {
             <Stat label="音符" value={meta.noteCount} />
             <Stat label="耗时" value={`${meta.elapsed.toFixed(1)}s`} />
           </div>
-          {(meta.recommendedShift != null || meta.melodyAlgo || meta.arrangementMode) && (
+          {(meta.recommendedShift != null || meta.melodyAlgo || meta.arrangementMode || meta.fidelityMode) && (
             <div className="grid grid-cols-2 gap-3 text-xs">
-              {meta.arrangementMode && (
+              {meta.fidelityMode === "raw" && (
+                <Stat
+                  label="模式"
+                  value={
+                    <span className="text-emerald-300">
+                      100% 保真
+                      {meta.perStemAlgo
+                        ? ` · ${Object.keys(meta.perStemAlgo).length} 轨`
+                        : ""}
+                    </span>
+                  }
+                />
+              )}
+              {meta.fidelityMode !== "raw" && meta.arrangementMode && (
                 <Stat
                   label="编配"
                   value={

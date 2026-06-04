@@ -43,24 +43,28 @@ export function Uploader() {
   const currentStem = options.transcribeStem ?? chosen[0];
 
   /**
-   * 「一键 AI 扒谱」预设（v2 · 复音保留 + 和弦感知）：
-   *   去人声 → 在伴奏轨上跑 Basic Pitch（复音）→ 和弦识别 → voicing reducer
-   *   产出：旋律 + 根音 + 三/五音的多指演奏谱（光遇 4 指可控）。
-   * 对比旧版强单音：保留和弦让谱子"立得住"，不再单薄。
+   * 「100% 保真扒谱」预设（v4 · 学习"爱扒谱"形态）：
+   *   Demucs 6stems 分离 → 每条 stem 用最佳算法独立转录
+   *     vocals → PYIN/Viterbi 单音旋律
+   *     piano/guitar/bass/other → Basic Pitch 复音
+   *   产出：88 键全音域多 track MIDI，**完全不做** 移调/单音化/量化吸附/voicing。
+   *   光遇 15/25 键映射交给 editor 端按需处理。
    */
   const applyOneClickPreset = () => {
     setOptions({
-      stems: ["vocals", "no_vocals"],
-      separationMode: "vocals",
-      transcribeStem: "no_vocals",
+      fidelityMode: "raw",
+      stems: ["vocals", "piano", "guitar", "bass", "other", "drums"],
+      separationMode: "6stems",
+      transcribeStem: "vocals",       // 仅作元数据；raw 模式下所有 stem 都会被转录
+      // 关掉所有「驯化」开关
       melodyMode: "auto",
-      arrangementMode: "polyphonic",   // 关键：保留和弦
+      arrangementMode: "polyphonic",
       maxSimultaneous: 4,
-      detectChords: true,
+      detectChords: false,
       forceMonophonic: false,
-      optimizePlayKey: true,
+      optimizePlayKey: false,
       transposeToC: false,
-      simplifyMelody: false,           // 复音模式下别再"装饰音剪枝"，让 voicing reducer 决定
+      simplifyMelody: false,
       quantizeGrid: 16,
     });
   };
@@ -290,7 +294,7 @@ export function Uploader() {
         </div>
       </div>
 
-      {/* 一键预设：去人声 + 复音保留和弦 + 调键优化 */}
+      {/* 一键预设：100% 保真多 stem 多 track 扒谱 */}
       <button
         type="button"
         onClick={applyOneClickPreset}
@@ -298,7 +302,7 @@ export function Uploader() {
         className="w-full py-2 rounded-lg border border-amber-500/60 bg-amber-500/10 hover:bg-amber-500/20 text-amber-200 text-xs flex items-center justify-center gap-2 disabled:opacity-50"
       >
         <Wand2 className="w-3.5 h-3.5" />
-        一键 AI 扒谱 · 去人声 + 保留和弦 + 最佳调
+        100% 保真扒谱 · 6 stem 多乐器 · 全音域 MIDI
       </button>
 
       <button

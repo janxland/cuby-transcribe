@@ -4,8 +4,11 @@ import { useStore } from "@/store";
 import { useStoreShallow, usePrimaryMeta } from "@/selectors";
 import { useMixerOptional } from "./mixer";
 import { Transport } from "./mixer/Transport";
+import { ToneTransport } from "./ToneTransport";
 import { StemsPanel } from "./StemsPanel";
 import { PRESETS, playNote, type PresetId } from "./synth";
+import { toneClock } from "@/utils/toneClock";
+import { useToneClockState } from "@/hooks/useToneClock";
 import { stemMeta } from "@/stems";
 import { pitchName } from "@/utils/music";
 import { isTypingTarget } from "@/utils/dom";
@@ -74,11 +77,43 @@ interface SchedNote { time: number; duration: number; pitch: number; velocity: n
 export function Sky15Keys() {
   const { scores, activeStems } = useStoreShallow((s) => ({ scores: s.scores, activeStems: s.activeStems }));
   const toggleActiveStem = useStore((s) => s.toggleActiveStem);
+  const globalPreset = useStore((s) => s.globalPreset);
+  const autoPlayRequest = useStore((s) => s.autoPlayRequest);
+  const playbackMode = useStore((s) => s.playbackMode);
   const primaryMeta = usePrimaryMeta();
   const mixer = useMixerOptional();
+  const tone = useToneClockState();
+  const isMidiMode = playbackMode === "midi";
 
   const [presetMap, setPresetMap] = useState<Record<string, PresetId>>({});
-  const presetOf = useCallback((stem: string): PresetId => presetMap[stem] ?? "triangle", [presetMap]);
+  const presetOf = useCallback(
+    (stem: string): PresetId => presetMap[stem] ?? globalPreset,
+    [presetMap, globalPreset],
+  );
+
+  // 响应 store.requestAutoPlay()：根据播放模式选对应引擎起播
+  useEffect(() => {
+    if (!autoPlayRequest) return;
+    if (isMidiMode) {
+      // MIDI 模式：交由 HeaderControls 在手势同帧里 play，
+      // 这里仅作为兼容补补刀（如果 HeaderControls 走事件子路径未起播）
+      if (!toneClock.getState().playing) void toneClock.play(0);
+      return;
+    }
+    if (!mixer) return;
+    let cancelled = false;
+    const tryPlay = (attempts = 0) => {
+      if (cancelled) return;
+      if (mixer.loading && attempts < 30) {
+        window.setTimeout(() => tryPlay(attempts + 1), 100);
+        return;
+      }
+      if (!mixer.playing) void mixer.play(0);
+    };
+    tryPlay();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoPlayRequest]);
   /** 视觉脉冲集合：以 pitch 为 key（覆盖 25 键全部） */
   const [pressed, setPressed] = useState<Set<number>>(new Set());
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -112,16 +147,17 @@ export function Sky15Keys() {
   }, [stream]);
   const maxCount = Math.max(1, ...Object.values(counts));
 
-  const playheadTime = mixer?.time ?? 0;
-  const followMixer = !!mixer && mixer.playing;
+  // 统一的播放头：MIDI 模式走 toneClock，其它走 mixer
+  const playheadTime = isMidiMode ? tone.time : (mixer?.time ?? 0);
+  const isFollowing = isMidiMode ? tone.playing : (!!mixer && mixer.playing);
   const autoActive = useMemo(() => {
     const set = new Set<number>();
-    if (!followMixer) return set;
+    if (!isFollowing) return set;
     for (const n of stream) {
       if (playheadTime >= n.time && playheadTime < n.time + n.duration) set.add(n.pitch);
     }
     return set;
-  }, [stream, playheadTime, followMixer]);
+  }, [stream, playheadTime, isFollowing]);
 
   const fireNote = useCallback((pitch: number, preset: PresetId, duration = 0.35, velocity = 96) => {
     void playNote(preset, pitch, duration, velocity);
@@ -142,6 +178,12 @@ export function Sky15Keys() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target) || e.repeat) return;
+      // MIDI 模式下空格控制 toneClock（mixer Panel 的 Space 不再生效，因为没有音轨）
+      if (isMidiMode && e.code === "Space") {
+        e.preventDefault();
+        toneClock.toggle();
+        return;
+      }
       const k = e.key.toLowerCase();
       if (e.shiftKey) {
         const p = SHIFT_KEY_TO_BLACK[k];
@@ -157,22 +199,24 @@ export function Sky15Keys() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [triggerPitch]);
+  }, [triggerPitch, isMidiMode]);
 
-  // 自动调度（与 v0.3 相同逻辑）
+  // 自动调度：
+  //  - mixer 模式：手写 rAF 调度器 + synth.ts 发声（保持原逻辑）
+  //  - midi 模式 ：Tone.PolySynth 已在 Tone.Part 里发声，这里只需更新视觉高亮
   const cursorRef = useRef(0);
   const lastTimeRef = useRef(0);
   useEffect(() => {
-    const t = mixer?.time ?? 0;
+    const t = playheadTime;
     let i = 0;
     while (i < stream.length && stream[i].time <= t) i++;
     cursorRef.current = i;
     lastTimeRef.current = t;
-  }, [stream, mixer?.playing]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [stream, isFollowing]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!followMixer) return;
-    const t = mixer!.time;
+    if (!isFollowing) return;
+    const t = playheadTime;
     const last = lastTimeRef.current;
     if (t < last || t - last > 0.5) {
       let i = 0;
@@ -185,13 +229,25 @@ export function Sky15Keys() {
       let i = cursorRef.current;
       while (i < stream.length && stream[i].time <= t) {
         const n = stream[i];
-        if (n.time > last) fireNote(n.pitch, presetOf(n.stem), n.duration, n.velocity);
+        if (n.time > last) {
+          if (isMidiMode) {
+            // 只起视觉脉冲，不双发声
+            setPressed((s) => { const ns = new Set(s); ns.add(n.pitch); return ns; });
+            const holdMs = Math.max(180, Math.min(1400, n.duration * 1000));
+            const pitch = n.pitch;
+            window.setTimeout(() => {
+              setPressed((s) => { const ns = new Set(s); ns.delete(pitch); return ns; });
+            }, holdMs);
+          } else {
+            fireNote(n.pitch, presetOf(n.stem), n.duration, n.velocity);
+          }
+        }
         i++;
       }
       cursorRef.current = i;
       lastTimeRef.current = t;
     }
-  }, [mixer?.time, followMixer, stream, fireNote, presetOf]);
+  }, [playheadTime, isFollowing, isMidiMode, stream, fireNote, presetOf]);
 
   const bpm = primaryMeta?.bpm;
   const rows = useMemo(() => [
@@ -202,7 +258,7 @@ export function Sky15Keys() {
 
   return (
     <div className="flex flex-col gap-3">
-      {mixer && <Transport bpm={bpm} />}
+      {isMidiMode ? <ToneTransport bpm={bpm} /> : (mixer && <Transport bpm={bpm} />)}
 
       <div className="rounded-xl border border-slate-800 bg-gradient-to-br from-slate-900 to-slate-950 p-6 space-y-4">
         {/* 演奏轨 chip 行 */}

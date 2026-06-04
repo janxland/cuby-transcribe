@@ -1,4 +1,4 @@
-"""15 键 voicing reducer · v3 · 旋律优先 + 和弦持续。
+"""25 键 voicing reducer · v3 · 旋律优先 + 和弦持续。
 
 设计目标：
   1. **旋律必须能听出**：把权威旋律线（PYIN 人声 / 或 top-of-poly 的 melody_notes）

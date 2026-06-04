@@ -48,6 +48,10 @@ export interface Metadata {
   recommendedShift?: number | null;
   /** 推荐玩家手感调（如 D / Eb …） */
   playableKey?: string | null;
+  /** 实际生效的保真模式 */
+  fidelityMode?: "raw" | "arranged";
+  /** raw 模式下每条 stem 用了什么算法 */
+  perStemAlgo?: Record<string, string> | null;
 }
 
 export interface ChordSegment {
@@ -80,6 +84,8 @@ export interface TaskState {
 }
 
 export interface UploadOptions {
+  /** 'raw' = 100% 保真多 stem 多 track 扒谱（默认）；'arranged' = 旧版光遇键盘适配 */
+  fidelityMode?: "raw" | "arranged";
   transposeToC: boolean;
   simplifyMelody: boolean;
   quantizeGrid: 8 | 16;

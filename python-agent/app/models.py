@@ -9,6 +9,12 @@ TranscribeStem = Literal[
 
 
 class ProcessOptions(BaseModel):
+    # —— 保真模式（v4 关键开关，默认 raw=100% 保真）——
+    # raw      : 多 stem 多乐器全保真转录，**不做** 移调/单音化/量化吸附/voicing/音域裁剪。
+    #            产出 88 键全音域多 track MIDI；交给前端 editor 自行做光遇 15/25 键映射。
+    # arranged : 旧版「为光遇键盘做编曲」流水线（移调 + voicing + 25 键音域）。
+    fidelityMode: Literal["raw", "arranged"] = "raw"
+
     transposeToC: bool = True
     quantizeGrid: Literal[8, 16] = 16
     simplifyMelody: bool = True
@@ -26,9 +32,9 @@ class ProcessOptions(BaseModel):
     melodyMode: Literal["auto", "vocal"] = "auto"
 
     # —— 编配模式（v2 关键开关）——
-    # polyphonic : 保留和弦/和声 → 15 键多指演奏谱（推荐 · 听感接近原曲）
+    # polyphonic : 保留和弦/和声 → 25 键多指演奏谱（推荐 · 听感接近原曲）
     # monophonic : 强行单音主旋律（旧版默认；只有一根线条）
-    # 默认 polyphonic：流行歌纯单音听起来太空，光遇 15 键支持多指同按。
+    # 默认 polyphonic：流行歌纯单音听起来太空，25 键支持多指同按。
     arrangementMode: Literal["polyphonic", "monophonic"] = "polyphonic"
 
     # —— 同时按键上限（仅 polyphonic 模式生效）——
@@ -120,6 +126,10 @@ class Metadata(BaseModel):
     recommendedShift: Optional[int] = None
     # 推荐升调键对应的「玩家手感调」（C / D / Eb …），方便 UI 显示
     playableKey: Optional[str] = None
+    # 实际生效的保真模式：'raw' | 'arranged'
+    fidelityMode: str = "arranged"
+    # raw 模式下，每条 stem 实际使用的算法
+    perStemAlgo: Optional[dict] = None
 
 
 class ProcessResponse(BaseModel):

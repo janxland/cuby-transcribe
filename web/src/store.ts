@@ -9,6 +9,9 @@ import { create } from "zustand";
 import type { CubyScore, Metadata, StemInfo, TaskState, UploadOptions } from "@/types";
 import { getTask, retranscribeStem, uploadAudio } from "@/api";
 import { toAppError } from "@/lib/http";
+import { parseMidiFile } from "@/utils/midiParser";
+import { toneClock } from "@/utils/toneClock";
+import { setSynthVolume, type PresetId } from "@/components/synth";
 
 export interface ScoreEntry { score: CubyScore; meta: Metadata }
 
@@ -35,6 +38,26 @@ interface Store {
   /** 原音预听条上报，PianoRoll 用作 playhead */
   currentTime: number;
 
+  // ── 键盘声音 / 加载 MIDI ──
+  /** 全局默认音色（当 stem 未单独设置时使用） */
+  globalPreset: PresetId;
+  setGlobalPreset: (p: PresetId) => void;
+  /** 合成器 master gain（0..1） */
+  masterVolume: number;
+  setMasterVolume: (v: number) => void;
+
+  /**
+   * 播放驱动器：
+   *  - 'mixer'：默认，依赖已解码的音频 stems（原音 / Demucs 输出）
+   *  - 'midi' ：加载纯 MIDI 后切换为 Tone.Transport 驱动，无需音频文件
+   */
+  playbackMode: "mixer" | "midi";
+  setPlaybackMode: (m: "mixer" | "midi") => void;
+
+  /** 调起自动播放信号：每次 +1，订阅者根据 playbackMode 选对应引擎起播 */
+  autoPlayRequest: number;
+  requestAutoPlay: () => void;
+
   setFile: (f: File | null) => void;
   setOptions: (o: Partial<UploadOptions>) => void;
   setCurrentTime: (t: number) => void;
@@ -44,19 +67,23 @@ interface Store {
   updateScoreNotes: (stem: string, notes: CubyScore["tracks"][number]["notes"]) => void;
   startUpload: () => Promise<void>;
   retranscribeWith: (stem: string) => Promise<void>;
+  /** 直接加载本地 .mid/.midi 文件为可播放谱子 */
+  loadMidiFile: (file: File) => Promise<void>;
   reset: () => void;
 }
 
 const DEFAULT_OPTIONS: UploadOptions = {
-  transposeToC: true,
-  simplifyMelody: true,
+  // 默认 100% 保真：直接给前端 editor 全音域多 track MIDI
+  fidelityMode: "raw",
+  transposeToC: false,
+  simplifyMelody: false,
   quantizeGrid: 16,
-  separationMode: "none",
-  stems: [],
+  separationMode: "6stems",
+  stems: ["vocals", "piano", "guitar", "bass", "other", "drums"],
   melodyMode: "auto",
   arrangementMode: "polyphonic",
   maxSimultaneous: 4,
-  detectChords: true,
+  detectChords: false,
   forceMonophonic: false,
   optimizePlayKey: false,
 };
@@ -114,12 +141,26 @@ export const useStore = create<Store>((set, get) => ({
   options: DEFAULT_OPTIONS,
   ...blankPatch(),
 
+  globalPreset: "triangle",
+  setGlobalPreset: (globalPreset) => set({ globalPreset }),
+  masterVolume: 0.85,
+  setMasterVolume: (v) => {
+    const clamped = Math.max(0, Math.min(1, v));
+    setSynthVolume(clamped);
+    toneClock.setVolume(clamped);
+    set({ masterVolume: clamped });
+  },
+  playbackMode: "mixer",
+  setPlaybackMode: (playbackMode) => set({ playbackMode }),
+  autoPlayRequest: 0,
+  requestAutoPlay: () => set((s) => ({ autoPlayRequest: s.autoPlayRequest + 1 })),
+
   setFile: (f) => {
     activeJob?.ctrl.abort();
     activeJob = null;
     const prev = get().audioUrl;
     if (prev) URL.revokeObjectURL(prev);
-    set({ file: f, audioUrl: f ? URL.createObjectURL(f) : null, ...blankPatch() });
+    set({ file: f, audioUrl: f ? URL.createObjectURL(f) : null, playbackMode: "mixer", ...blankPatch() });
   },
 
   setOptions: (o) => set({ options: { ...get().options, ...o } }),
@@ -152,7 +193,57 @@ export const useStore = create<Store>((set, get) => ({
     activeJob = null;
     const prev = get().audioUrl;
     if (prev) URL.revokeObjectURL(prev);
-    set({ file: null, audioUrl: null, ...blankPatch() });
+    toneClock.stop();
+    set({ file: null, audioUrl: null, playbackMode: "mixer", ...blankPatch() });
+  },
+
+  loadMidiFile: async (file) => {
+    // 直接加载 MIDI：跳过整套扒谱流水线，用 Tone.Transport 驱动播放
+    activeJob?.ctrl.abort();
+    activeJob = null;
+    const prev = get().audioUrl;
+    if (prev) URL.revokeObjectURL(prev);
+
+    try {
+      const { score, durationSec, rawPitchRange } = await parseMidiFile(file);
+      const stemName = "midi";
+      const noteCount = score.tracks.reduce((s, t) => s + t.notes.length, 0);
+      const meta: Metadata = {
+        detectedKey: score.meta.keySignature,
+        detectedMode: "major",
+        bpm: score.meta.bpm,
+        duration: durationSec,
+        noteCount,
+        elapsed: 0,
+        transcribedStem: stemName,
+      };
+      set({
+        ...blankPatch(),
+        file: null,
+        audioUrl: null,
+        stems: [],
+        scores: { [stemName]: { score, meta } },
+        activeStems: [stemName],
+        playbackMode: "midi",
+        task: {
+          taskId: "local-midi",
+          status: "completed",
+          progress: 100,
+          message: `已加载 ${file.name}（${noteCount} 音符 · ${score.meta.bpm} BPM · 原音域 ${rawPitchRange.min}-${rawPitchRange.max}）`,
+        },
+      });
+      toneClock.loadScore(score, durationSec);
+      // 由 HeaderControls 在用户手势上下文里调 ensureStarted+play；这里只发信号
+      get().requestAutoPlay();
+    } catch (e) {
+      const err = toAppError(e);
+      set({
+        task: {
+          taskId: "local-midi", status: "failed", progress: 0,
+          message: "MIDI 加载失败", error: err.message,
+        },
+      });
+    }
   },
 
   startUpload: async () => {

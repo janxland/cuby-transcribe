@@ -20,9 +20,11 @@ from __future__ import annotations
 from typing import List
 
 FRAME_SEC = 0.02
-MELODY_BAND = (60, 84)   # Sky 15 键音域 = C4..C6；在此区间额外加 salience
-BAND_BONUS  = 4.0        # 落在甜区奖励（约等于 4 个半音的优势）
-VEL_WEIGHT  = 0.05       # velocity 0..127 → 最多 ~6 加成（次级 tie-break）
+MELODY_BAND = (60, 84)   # 25 键音域 = C4..C6；在此区间额外加 salience
+# v3：把 4.0 → 1.0。原值会让 60-84 范围内任何音都比 bass(38-50) 有 4+ 半音优势，
+# 直接吃掉所有低频伴奏 —— 这是和 爱扒谱 比对时音域只剩 C4-C6 的元凶。
+BAND_BONUS  = 1.0        # 落在甜区奖励（仅作微弱 tie-break）
+VEL_WEIGHT  = 0.10       # velocity 0..127 → 最多 ~12 加成（让重音胜过音高）
 
 
 def _salience(pitch: int, velocity: int) -> float:

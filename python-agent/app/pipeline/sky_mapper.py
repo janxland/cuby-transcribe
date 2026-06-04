@@ -87,11 +87,59 @@ def simplify_melody(notes: List[dict], min_duration: float = 0.12) -> List[dict]
     return merged
 
 
-def quantize_rhythm(notes: List[dict], bpm: float, grid: int = 16) -> List[dict]:
+def quantize_rhythm(
+    notes: List[dict],
+    bpm: float,
+    grid: int = 16,
+    beat_times: List[float] | None = None,
+) -> List[dict]:
+    """节奏量化。
+
+    beat_times 不为空时：基于真实 beat 位置吸附（每两个 beat 间等分 grid_subdiv）。
+    beat_times 为空时：回退到等距 BPM 网格（兼容旧行为）。
+    """
+    import numpy as np
+
+    if not notes:
+        return notes
+
+    # 真实 beat 吸附路径
+    if beat_times and len(beat_times) >= 2:
+        grid_subdiv = max(1, grid // 4)  # grid=16 → 每 beat 4 等分（十六分音符）
+        sub_beats = []
+        for i in range(len(beat_times) - 1):
+            t0 = beat_times[i]
+            t1 = beat_times[i + 1]
+            for j in range(grid_subdiv):
+                sub_beats.append(t0 + (t1 - t0) * j / grid_subdiv)
+        sub_beats.append(beat_times[-1])
+        sub_beats = sorted(set(sub_beats))
+        sb_arr = np.array(sub_beats)
+
+        def snap(t: float) -> float:
+            idx = int(np.searchsorted(sb_arr, t))
+            candidates = []
+            if idx > 0:
+                candidates.append(float(sb_arr[idx - 1]))
+            if idx < len(sb_arr):
+                candidates.append(float(sb_arr[idx]))
+            return min(candidates, key=lambda x: abs(x - t)) if candidates else t
+
+        out = []
+        for n in notes:
+            s = snap(n["start"])
+            e = snap(n["end"])
+            if e <= s:
+                idx = int(np.searchsorted(sb_arr, s))
+                e = float(sb_arr[min(idx + 1, len(sb_arr) - 1)])
+            out.append({**n, "start": s, "end": e})
+        return out
+
+    # 回退：等距 BPM 网格
     if bpm <= 0:
         return notes
     sec_per_beat = 60.0 / bpm
-    step = sec_per_beat * 4 / grid  # 每格秒
+    step = sec_per_beat * 4 / grid
     out = []
     for n in notes:
         start = round(n["start"] / step) * step
@@ -121,11 +169,12 @@ def process(
     simplify: bool = True,
     grid: int = 16,
     force_natural: bool = False,
+    beat_times: List[float] | None = None,
 ) -> List[dict]:
     """单音映射主入口。
 
     force_natural=False（默认）：保留全部半音，输出可在 25 键键盘上直接弹奏。
-    force_natural=True：把变化音就近折叠到 C 大调白键（旧 15 键行为）。
+    force_natural=True：把变化音就近折叠到 C 大调白键（旧 15 白键兼容模式）。
     """
     if not notes:
         return notes
@@ -134,7 +183,7 @@ def process(
         notes = resolve_accidentals(notes)
     if simplify:
         notes = simplify_melody(notes)
-    notes = quantize_rhythm(notes, bpm, grid)
+    notes = quantize_rhythm(notes, bpm, grid, beat_times=beat_times)
     notes = constrain_to_sky(notes)
     notes.sort(key=lambda n: n["start"])
     return notes
@@ -154,7 +203,7 @@ def process_polyphonic(
     max_simultaneous: int = 4,
 ) -> tuple[List[dict], int]:
     """
-    保留和声的 15 键 voicing：返回 (notes, max_concurrent)。
+    保留和声的 25 键 voicing（C4-C6 全半音阶）：返回 (notes, max_concurrent)。
 
     melody_notes（可选）= 权威旋律线（如 PYIN 人声）。给了就用，没给就从 notes 取 top。
     """

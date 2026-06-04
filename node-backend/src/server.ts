@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { createTask, getTask } from "./store.js";
+import type { TaskOptions } from "./store.js";
 import { runTask, PYTHON_AGENT_URL } from "./agent.js";
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -93,7 +94,7 @@ app.post("/api/transcribe/:taskId/retranscribe", async (req, reply) => {
   const newTask = createTask(saved, {
     ...task.options,
     separationMode: "none",
-    transcribeStem: stem,
+    transcribeStem: stem as TaskOptions["transcribeStem"],
   });
   runTask(newTask).catch((e) => app.log.error(e));
   return { taskId: newTask.taskId, status: newTask.status };

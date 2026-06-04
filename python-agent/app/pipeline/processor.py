@@ -16,10 +16,13 @@ from . import (
     melody_picker,
     key_optimizer,
     chord_detector,
+    raw_transcriber,
 )
 
 PITCH_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-MELODY_VELOCITY_FLOOR = 90
+# v3：90 太严，Basic Pitch 输出 velocity 多在 60-90 之间 —— 几乎全被分到 Chord 轨，
+# Melody 轨变空，触发空轨 fallback → 所有音塞进单 Melody → 与 爱扒谱 对比一片单声部。
+MELODY_VELOCITY_FLOOR = 75
 
 
 STEMS_ROOT = os.environ.get("STEMS_DIR", "/tmp/cuby-stems")
@@ -56,7 +59,22 @@ def _build_tracks(notes: list[dict], arrangement_mode: str) -> list[Track]:
 
     melody_notes = [n for n in notes if n.get("velocity", 90) >= MELODY_VELOCITY_FLOOR]
     chord_notes = [n for n in notes if n.get("velocity", 90) < MELODY_VELOCITY_FLOOR]
+
+    # v3：velocity 分轨失败时改用 **音高分轨** —— 高音→Melody，低音→Chord。
+    # 原实现在分轨失败时把所有音塞进 Melody、Chord 留空 → 输出退化成单声部。
     if not melody_notes or not chord_notes:
+        if len(notes) >= 4:
+            pitches = sorted(n["pitch"] for n in notes)
+            split_pitch = pitches[len(pitches) // 2]  # 中位音高
+            melody_notes = [n for n in notes if n["pitch"] >= split_pitch]
+            chord_notes = [n for n in notes if n["pitch"] < split_pitch]
+            if melody_notes and chord_notes:
+                return [
+                    Track(id="track_1", name="Melody", instrument="Grand Piano",
+                          notes=[_to_score_note(n) for n in melody_notes]),
+                    Track(id="track_2", name="Chord", instrument="Grand Piano",
+                          notes=[_to_score_note(n) for n in chord_notes]),
+                ]
         return [
             Track(
                 id="track_1",
@@ -96,6 +114,15 @@ def run(audio_path: str, options: ProcessOptions, task_id: str | None = None) ->
     task_id = task_id or uuid.uuid4().hex[:8]
     stems_dir = os.path.join(STEMS_ROOT, task_id)
     stems: list[StemInfo] = []
+
+    # ════════════════════════════════════════════════════════════════
+    # v4 · 100% 保真扒谱分支
+    # ════════════════════════════════════════════════════════════════
+    # 默认走这条路径；产出 88 键全音域多 track MIDI，零驯化。
+    # 光遇 15/25 键映射 / 移调 / voicing 全部由前端 editor 自行决定。
+    if options.fidelityMode == "raw":
+        return _run_raw(audio_path, options, task_id, stems_dir, t0)
+    # ════════════════════════════════════════════════════════════════
 
     audio_for_transcribe = audio_path
     # 「这次扒的是哪条 stem」由 options.transcribeStem 权威决定；
@@ -189,13 +216,14 @@ def run(audio_path: str, options: ProcessOptions, task_id: str | None = None) ->
 
     # —— 和弦识别（polyphonic 模式必备 / monophonic 仅作元数据）——
     chord_segments: list[dict] = []
+    beat_times: list[float] = []  # 真实 beat 位置，用于节奏量化吸附
     if options.detectChords:
         # 和弦在「原始未移调」音频上识别更准；用整曲（含人声/伴奏） vs 选定 stem
         # 选: 优先用整曲（chord 信息在伴奏/和声更丰富）
         chord_audio = audio_path
         try:
-            chord_segments, _beats = chord_detector.detect(chord_audio)
-            logger.info(f"[stage] chord detection: {len(chord_segments)} segments")
+            chord_segments, beat_times = chord_detector.detect(chord_audio)
+            logger.info(f"[stage] chord detection: {len(chord_segments)} segments, {len(beat_times)} beats")
         except Exception as e:
             logger.warning(f"[chord] detection failed: {e}")
             chord_segments = []
@@ -231,7 +259,7 @@ def run(audio_path: str, options: ProcessOptions, task_id: str | None = None) ->
             chord_segments = chord_detector.transpose_chords(chord_segments, shift_to_c)
         final_key_sig = "C"
 
-    # —— 15 键映射（按编配模式分支）——
+    # —— 25 键映射（按编配模式分支，C4-C6 全半音阶）——
     max_concurrent = 1
     if arrangement_mode == "polyphonic" and not use_pyin:
         # 同步移调 vocal melody（如果有）
@@ -256,7 +284,8 @@ def run(audio_path: str, options: ProcessOptions, task_id: str | None = None) ->
         )
     else:
         sky_notes = sky_mapper.process(
-            notes, bpm, simplify=options.simplifyMelody, grid=options.quantizeGrid
+            notes, bpm, simplify=options.simplifyMelody, grid=options.quantizeGrid,
+            beat_times=beat_times or None,
         )
         max_concurrent = 1
         arrangement_mode = "monophonic"  # 兜底标记
@@ -296,6 +325,146 @@ def run(audio_path: str, options: ProcessOptions, task_id: str | None = None) ->
         ] if chord_segments else None,
         recommendedShift=recommended_shift,
         playableKey=playable_key,
+    )
+
+    return {
+        "cubyScore": score.model_dump(),
+        "metadata": meta.model_dump(),
+        "stems": [s.model_dump() for s in stems],
+        "taskId": task_id,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════
+# v4 · 100% 保真分支实现
+# ══════════════════════════════════════════════════════════════════
+
+def _run_raw(
+    audio_path: str,
+    options: ProcessOptions,
+    task_id: str,
+    stems_dir: str,
+    t0: float,
+) -> dict:
+    """高保真多 stem 多乐器扒谱：零驯化，全音域，多 track 输出。
+
+    流程：
+      1. (可选) Demucs 分离 —— 默认强制 6stems 以获得 piano/guitar 单独 stem
+      2. BPM 后台并行测算（仅作元数据，不参与量化）
+      3. 每条 stem 用最佳算法独立转录（vocals→PYIN，余→Basic Pitch）
+      4. 直接拼接为多 track CubyScore 返回，pitch/timing **完全保真**
+    """
+    stems: list[StemInfo] = []
+
+    # —— 1. BPM 并行测算（仅元数据用） ——
+    bpm_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bpm-raw")
+    bpm_future: Future = bpm_pool.submit(transcriber.detect_bpm, audio_path)
+    bpm_pool.shutdown(wait=False)
+
+    # —— 2. 分离（raw 默认仍尊重用户的 separationMode）——
+    stem_paths: dict[str, str] = {}
+    if options.separationMode != "none":
+        from . import separator
+        keep = list(options.stems) if options.stems else None
+        logger.info(f"[raw] separation mode={options.separationMode} keep={keep}")
+        stem_paths = separator.separate(
+            audio_path, stems_dir, mode=options.separationMode, keep_stems=keep,
+        )
+        for name, path in stem_paths.items():
+            stems.append(StemInfo(
+                name=name,
+                url=f"/internal/stems/{task_id}/{name}.wav",
+                duration=_duration(path),
+            ))
+
+    # —— 3. BPM 等回 ——
+    try:
+        bpm: float = bpm_future.result(timeout=30) or 120.0
+    except Exception as e:
+        logger.warning(f"[raw] bpm failed: {e}")
+        bpm = 120.0
+
+    # —— 4. 转录 ——
+    if stem_paths:
+        # 多 stem：每条独立转录
+        tracks_data, algos = raw_transcriber.transcribe_stems(stem_paths, bpm=bpm)
+        if not tracks_data:
+            # 所有 stem 都失败 → 退回整曲转录
+            logger.warning("[raw] all stems empty, fall back to full mix")
+            full_notes = raw_transcriber.transcribe_single(audio_path, bpm=bpm)
+            tracks_data = [{
+                "id": "track_1",
+                "name": "original",
+                "instrument": "Full Mix",
+                "notes": [raw_transcriber._to_score_note(n) for n in full_notes],
+            }]
+            algos = {"original": "basic_pitch"}
+    else:
+        # 不分离：整曲 Basic Pitch 复音保真
+        full_notes = raw_transcriber.transcribe_single(audio_path, bpm=bpm)
+        tracks_data = [{
+            "id": "track_1",
+            "name": "original",
+            "instrument": "Full Mix",
+            "notes": [raw_transcriber._to_score_note(n) for n in full_notes],
+        }]
+        algos = {"original": "basic_pitch"}
+
+    # —— 5. 调性识别（**仅作元数据**，不参与移调）——
+    all_notes = [n for tr in tracks_data for n in tr["notes"]]
+    detected_key = "C"
+    detected_mode = "major"
+    if all_notes:
+        # key_detector 接收 raw 形式 {pitch,start,end}
+        key_input = [{
+            "pitch": n["pitch"],
+            "start": n["time"],
+            "end": n["time"] + n["duration"],
+        } for n in all_notes]
+        try:
+            kinfo = key_detector.detect_key(key_input)
+            detected_key = kinfo["key"]
+            detected_mode = kinfo["mode"]
+        except Exception as e:
+            logger.warning(f"[raw] key detection failed: {e}")
+
+    duration = max((n["time"] + n["duration"] for n in all_notes), default=0.0)
+    note_count = len(all_notes)
+    title = os.path.splitext(os.path.basename(audio_path))[0]
+
+    score = CubyScore(
+        meta=Meta(
+            title=title,
+            bpm=round(bpm, 2),
+            keySignature=detected_key,
+        ),
+        tracks=[
+            Track(
+                id=tr["id"],
+                name=tr["name"],
+                instrument=tr["instrument"],
+                notes=[Note(**n) for n in tr["notes"]],
+            )
+            for tr in tracks_data
+        ],
+    )
+
+    meta = Metadata(
+        detectedKey=detected_key,
+        detectedMode=detected_mode,
+        bpm=round(bpm, 2),
+        duration=round(duration, 2),
+        noteCount=note_count,
+        elapsed=round(time.time() - t0, 2),
+        transcribedStem="multi" if len(tracks_data) > 1 else (tracks_data[0]["name"] if tracks_data else "original"),
+        melodyAlgo="raw_multi_stem",
+        arrangementMode="polyphonic",
+        maxConcurrent=0,  # raw 不限制
+        chords=None,
+        recommendedShift=None,
+        playableKey=None,
+        fidelityMode="raw",
+        perStemAlgo=algos or None,
     )
 
     return {
