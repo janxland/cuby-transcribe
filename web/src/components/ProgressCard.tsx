@@ -1,10 +1,12 @@
-import { Loader2, CheckCircle2, XCircle } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, Download } from "lucide-react";
 import { useStore } from "@/store";
-import { usePrimaryMeta } from "@/selectors";
+import { usePrimaryMeta, usePrimaryScore } from "@/selectors";
+import { downloadMidi } from "@/utils/midiExporter";
 
 export function ProgressCard() {
   const task = useStore((s) => s.task);
   const meta = usePrimaryMeta();
+  const score = usePrimaryScore();
   if (!task) return null;
 
   const Icon =
@@ -40,6 +42,27 @@ export function ProgressCard() {
             <Stat label="音符" value={meta.noteCount} />
             <Stat label="耗时" value={`${meta.elapsed.toFixed(1)}s`} />
           </div>
+
+          {/* 导出 MIDI */}
+          {task.status === "completed" && score && (
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={() => downloadMidi(score, undefined, "multi")}
+                className="flex-1 py-2 rounded-lg bg-emerald-600/90 hover:bg-emerald-500 text-white text-sm font-medium flex items-center justify-center gap-2 transition"
+              >
+                <Download className="w-4 h-4" />
+                导出 MIDI（多轨保真）
+              </button>
+              <button
+                onClick={() => downloadMidi(score, undefined, "single")}
+                title="所有轨合并为单轨 MIDI"
+                className="px-3 py-2 rounded-lg border border-slate-700 hover:border-slate-500 text-slate-300 text-xs flex items-center gap-1.5 transition"
+              >
+                <Download className="w-3.5 h-3.5" />
+                单轨
+              </button>
+            </div>
+          )}
           {(meta.recommendedShift != null || meta.melodyAlgo || meta.arrangementMode || meta.fidelityMode) && (
             <div className="grid grid-cols-2 gap-3 text-xs">
               {meta.fidelityMode === "raw" && (

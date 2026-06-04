@@ -4,9 +4,9 @@
  * 编辑器历经多版打磨已验证 @tonejs/midi 在各种边角 MIDI 上稳定，
  * cuby-transcribe 不再维护手写 SMF 解析器。
  *
- * 输出约定：
+ * 输出约定（v2 · 100% 保真）：
  *  - Note.time / Note.duration 单位 = 秒（与 Python pipeline 一致）
- *  - Note.pitch 折叠到 25 键区间 [60, 84]
+ *  - Note.pitch **保留 MIDI 原值（0-127）**，光遇 15/25 键映射交给前端展示层处理
  *  - score.meta.ppq 保留 MIDI 文件原值，方便 toneClock 用 ticks
  */
 import { Midi } from "@tonejs/midi";
@@ -16,13 +16,6 @@ export interface ParsedMidi {
   score: CubyScore;
   durationSec: number;
   rawPitchRange: { min: number; max: number };
-}
-
-function foldPitchInto25Keys(pitch: number): number {
-  let p = pitch;
-  while (p < 60) p += 12;
-  while (p > 84) p -= 12;
-  return p;
 }
 
 export async function parseMidiFile(file: File): Promise<ParsedMidi> {
@@ -43,7 +36,7 @@ export async function parseMidiFile(file: File): Promise<ParsedMidi> {
     const notes: Note[] = tk.notes.map((n) => {
       allRawPitches.push(n.midi);
       return {
-        pitch: foldPitchInto25Keys(n.midi),
+        pitch: n.midi,                         // 保真：不再折叠到 25 键
         time: n.time,
         duration: Math.max(0.05, n.duration),
         velocity: Math.max(1, Math.round(n.velocity * 127)),

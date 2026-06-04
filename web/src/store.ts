@@ -73,13 +73,14 @@ interface Store {
 }
 
 const DEFAULT_OPTIONS: UploadOptions = {
-  // 默认 100% 保真：直接给前端 editor 全音域多 track MIDI
+  // 默认 100% 保真 + 流行音乐最常用的「人声/伴奏 双轨」预设
   fidelityMode: "raw",
   transposeToC: false,
   simplifyMelody: false,
   quantizeGrid: 16,
-  separationMode: "6stems",
-  stems: ["vocals", "piano", "guitar", "bass", "other", "drums"],
+  separationMode: "vocals",
+  stems: ["vocals", "no_vocals"],
+  transcribeStem: "vocals",
   melodyMode: "auto",
   arrangementMode: "polyphonic",
   maxSimultaneous: 4,
