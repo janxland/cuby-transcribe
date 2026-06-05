@@ -65,6 +65,10 @@ const BLACK_KEYS: BlackKey[] = [
   { pitch: 82, row: 2, x: 0.60, shiftLabel: "⇧C", shiftKey: "c" }, // A#5
 ];
 
+const BLACK_KEY_ROW_LABELS = [0, 1, 2].map((row) =>
+  BLACK_KEYS.filter((key) => key.row === row).map((key) => pitchName(key.pitch)).join(" "),
+);
+
 const SHIFT_KEY_TO_BLACK: Record<string, number> = (() => {
   const m: Record<string, number> = {};
   for (const b of BLACK_KEYS) m[b.shiftKey] = b.pitch;
@@ -309,7 +313,7 @@ export function Sky15Keys() {
                       title={`${pitchName(b.pitch)} (${simpleNumberWithDot(b.pitch)}) · 键盘 ${b.shiftLabel}`}
                       className={[
                         "absolute -top-6 -translate-x-1/2 z-10",
-                        "w-9 h-9 rounded-full flex items-center justify-center font-mono",
+                        "w-12 h-12 rounded-full flex flex-col items-center justify-center gap-0.5 font-mono",
                         "border-2 transition-all duration-100 select-none cursor-pointer",
                         "focus:outline-none focus:ring-2 focus:ring-cyan-300/60",
                         lit
@@ -326,6 +330,9 @@ export function Sky15Keys() {
                       )}
                       <span className="relative text-[10px] leading-none">
                         {simpleNumberWithDot(b.pitch)}
+                      </span>
+                      <span className="relative text-[9px] leading-none opacity-75">
+                        {pitchName(b.pitch)}
                       </span>
                     </button>
                   );
@@ -375,6 +382,9 @@ export function Sky15Keys() {
         <div className="text-[11px] text-slate-500 text-center space-y-0.5">
           <div>
             主键 <Kbd>1-5</Kbd> <Kbd>QWERT</Kbd> <Kbd>ASDFG</Kbd> · 半音键 <Kbd>Shift</Kbd>+ 上方圆形按钮提示字母
+          </div>
+          <div>
+            10 键科学音名：{BLACK_KEY_ROW_LABELS.join(" / ")}（其中 G#4 在 G4 和 A4 之间）
           </div>
           <div>按 <Kbd>Space</Kbd> 播放谱子 · 鼠标 / 触屏点击直接弹奏</div>
         </div>
