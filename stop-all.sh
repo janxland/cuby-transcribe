@@ -15,7 +15,7 @@ stop_one() {
   fi
 
   local pid
-  pid="$(cat "$pid_file")"
+  pid="$(head -n 1 "$pid_file" | tr -d '[:space:]')"
 
   if [[ -z "$pid" ]]; then
     rm -f "$pid_file"

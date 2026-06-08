@@ -21,8 +21,12 @@ class ProcessOptions(BaseModel):
 
     # 音轨分离（Demucs）
     separationMode: SeparationMode = "none"
+    # 分离质量：fast=更快；high=更稳（更高 overlap + shifts）
+    separationQuality: Literal["fast", "high"] = "high"
     # 要扒哪条音轨；为 None 时根据 separationMode 自动决定
     transcribeStem: Optional[TranscribeStem] = None
+    # 纯人声扒谱时，自动转到 25 键可演奏范围（保留半音，不裁掉细节）
+    vocalToSky25: bool = True
     # 用户实际想要保留的 stems 名单；为 None 时保留全部 demucs 输出
     stems: Optional[List[str]] = None
 

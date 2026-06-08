@@ -86,6 +86,8 @@ export interface TaskState {
 export interface UploadOptions {
   /** 'raw' = 100% 保真多 stem 多 track 扒谱（默认）；'arranged' = 旧版光遇键盘适配 */
   fidelityMode?: "raw" | "arranged";
+  /** 分离质量：fast 更快；high 更稳 */
+  separationQuality?: "fast" | "high";
   transposeToC: boolean;
   simplifyMelody: boolean;
   quantizeGrid: 8 | 16;
@@ -95,6 +97,8 @@ export interface UploadOptions {
   stems: StemName[];
   /** 指定要扒谱的目标 stem；缺省时取 stems[0] */
   transcribeStem?: StemName;
+  /** 当目标是人声时，自动转成 25 键可按演奏 */
+  vocalToSky25?: boolean;
   /** 旋律提取模式：auto=Basic Pitch复音，vocal=PYIN 人声单音（需 transcribeStem=vocals） */
   melodyMode?: "auto" | "vocal";
   /** 编配模式：polyphonic 保留和弦/和声 · monophonic 强行单音 */

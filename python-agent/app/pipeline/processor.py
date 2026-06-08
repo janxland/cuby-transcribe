@@ -143,6 +143,7 @@ def run(audio_path: str, options: ProcessOptions, task_id: str | None = None) ->
             keep.append(options.transcribeStem)
         stem_paths = separator.separate(
             audio_path, stems_dir, mode=options.separationMode, keep_stems=keep,
+            quality=options.separationQuality,
         )
         for name, path in stem_paths.items():
             stems.append(StemInfo(
@@ -369,6 +370,7 @@ def _run_raw(
         logger.info(f"[raw] separation mode={options.separationMode} keep={keep}")
         stem_paths = separator.separate(
             audio_path, stems_dir, mode=options.separationMode, keep_stems=keep,
+            quality=options.separationQuality,
         )
         for name, path in stem_paths.items():
             stems.append(StemInfo(
@@ -385,9 +387,24 @@ def _run_raw(
         bpm = 120.0
 
     # —— 4. 转录 ——
+    recommended_shift: Optional[int] = None
+    playable_key: Optional[str] = None
+
     if stem_paths:
         # 多 stem：每条独立转录
-        tracks_data, algos = raw_transcriber.transcribe_stems(stem_paths, bpm=bpm)
+        melody_backend = "crepe" if options.separationQuality == "high" else "pyin"
+        # 人声细节增强：高质量模式保留更短音、减少合并，尽量“全扒下来”
+        vocal_min_note_sec = 0.04 if options.separationQuality == "high" else 0.08
+        vocal_merge_gap_sec = 0.03 if options.separationQuality == "high" else 0.06
+        vocal_voiced_thresh = 0.48 if options.separationQuality == "high" else 0.58
+        tracks_data, algos = raw_transcriber.transcribe_stems(
+            stem_paths,
+            bpm=bpm,
+            melody_backend=melody_backend,
+            vocal_min_note_sec=vocal_min_note_sec,
+            vocal_merge_gap_sec=vocal_merge_gap_sec,
+            vocal_voiced_thresh=vocal_voiced_thresh,
+        )
         if not tracks_data:
             # 所有 stem 都失败 → 退回整曲转录
             logger.warning("[raw] all stems empty, fall back to full mix")
@@ -409,6 +426,31 @@ def _run_raw(
             "notes": [raw_transcriber._to_score_note(n) for n in full_notes],
         }]
         algos = {"original": "basic_pitch"}
+
+    # —— 4.5 人声目标可演奏化：转到 25 键范围（默认开启）——
+    if options.vocalToSky25 and options.transcribeStem == "vocals":
+        for tr in tracks_data:
+            if tr.get("name") != "vocals" or not tr.get("notes"):
+                continue
+            vocal_raw = [
+                {
+                    "pitch": n["pitch"],
+                    "start": n["time"],
+                    "end": n["time"] + n["duration"],
+                    "velocity": n.get("velocity", 90),
+                }
+                for n in tr["notes"]
+            ]
+            best = key_optimizer.find_best_shift(vocal_raw)
+            recommended_shift = int(best["shift"])
+            shifted = key_optimizer.apply_shift(vocal_raw, recommended_shift)
+            playable = sky_mapper.adapt_range(shifted)
+            tr["notes"] = [raw_transcriber._to_score_note(n) for n in playable]
+            playable_key = PITCH_NAMES[(0 - recommended_shift) % 12]
+            logger.info(
+                f"[raw] vocals -> sky25 shift={recommended_shift:+d} playable_key={playable_key} notes={len(tr['notes'])}"
+            )
+            break
 
     # —— 5. 调性识别（**仅作元数据**，不参与移调）——
     all_notes = [n for tr in tracks_data for n in tr["notes"]]
@@ -461,8 +503,8 @@ def _run_raw(
         arrangementMode="polyphonic",
         maxConcurrent=0,  # raw 不限制
         chords=None,
-        recommendedShift=None,
-        playableKey=None,
+        recommendedShift=recommended_shift,
+        playableKey=playable_key,
         fidelityMode="raw",
         perStemAlgo=algos or None,
     )

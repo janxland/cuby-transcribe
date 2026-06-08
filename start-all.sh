@@ -26,7 +26,7 @@ check_service_not_running() {
 
   if [[ -f "$pid_file" ]]; then
     local pid
-    pid="$(cat "$pid_file")"
+    pid="$(head -n 1 "$pid_file" | tr -d '[:space:]')"
     if [[ -n "$pid" ]] && is_running "$pid"; then
       echo "[cleanup] stopping previous $name (pid=$pid)"
       kill "$pid" >/dev/null 2>&1 || true
@@ -127,7 +127,7 @@ verify_started() {
   local log_file="$LOG_DIR/$name.log"
 
   local pid
-  pid="$(cat "$pid_file")"
+  pid="$(head -n 1 "$pid_file" | tr -d '[:space:]')"
 
   sleep 1
   if ! is_running "$pid"; then

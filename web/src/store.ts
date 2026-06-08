@@ -75,12 +75,14 @@ interface Store {
 const DEFAULT_OPTIONS: UploadOptions = {
   // 默认 100% 保真 + 流行音乐最常用的「人声/伴奏 双轨」预设
   fidelityMode: "raw",
+  separationQuality: "high",
   transposeToC: false,
   simplifyMelody: false,
   quantizeGrid: 16,
   separationMode: "vocals",
   stems: ["vocals", "no_vocals"],
   transcribeStem: "vocals",
+  vocalToSky25: true,
   melodyMode: "auto",
   arrangementMode: "polyphonic",
   maxSimultaneous: 4,
@@ -129,6 +131,47 @@ function mergeScore(
   score: CubyScore,
   meta: Metadata,
 ): { scores: Record<string, ScoreEntry>; activeStems: string[] } {
+  // 后端 raw 多轨会以 transcribedStem='multi' 返回：
+  // 这里按 track 拆成独立通道，保证用户可按通道单独演奏/停止。
+  if (meta.transcribedStem === "multi" && (score.tracks?.length ?? 0) > 1) {
+    const nextScores: Record<string, ScoreEntry> = { ...prevScores };
+    const added: string[] = [];
+    const used = new Set<string>();
+
+    for (const tr of score.tracks ?? []) {
+      if (!tr?.notes?.length) continue;
+      let stem = (tr.name || tr.id || "track").trim();
+      if (!stem) stem = "track";
+      if (used.has(stem)) {
+        let i = 2;
+        while (used.has(`${stem}_${i}`)) i += 1;
+        stem = `${stem}_${i}`;
+      }
+      used.add(stem);
+
+      const singleScore: CubyScore = {
+        ...score,
+        tracks: [{ ...tr, id: "track_1" }],
+      };
+      const singleMeta: Metadata = {
+        ...meta,
+        transcribedStem: stem,
+        noteCount: tr.notes.length,
+      };
+      nextScores[stem] = { score: singleScore, meta: singleMeta };
+      added.push(stem);
+    }
+
+    if (!added.length) {
+      return { scores: prevScores, activeStems: prevActive };
+    }
+
+    return {
+      scores: nextScores,
+      activeStems: [...added, ...prevActive.filter((s) => !added.includes(s))],
+    };
+  }
+
   const stem = meta.transcribedStem || "unknown";
   return {
     scores: { ...prevScores, [stem]: { score, meta } },

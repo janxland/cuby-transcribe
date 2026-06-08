@@ -7,9 +7,10 @@
  *  - UI 收敛为 4 个核心模式（单选）+ 一个上传区 + 一个开始按钮
  */
 import { useRef, useState, useMemo } from "react";
-import { Upload, Music, X, FileMusic, Mic2, Music2, Layers } from "lucide-react";
+import { Upload, Music, X, FileMusic, Mic2, Music2, Layers, SlidersHorizontal } from "lucide-react";
 import { useStore } from "@/store";
 import type { UploadOptions } from "@/types";
+import { STEM_REGISTRY, type StemName } from "@/stems";
 
 type Mode = "full" | "vocals" | "instrumental" | "dual";
 
@@ -86,10 +87,20 @@ function deriveModeFromOptions(o: UploadOptions): Mode {
   return "dual";
 }
 
+const ALL_STEMS: StemName[] = ["vocals", "no_vocals", "drums", "bass", "other", "piano", "guitar"];
+
+function deriveSeparationMode(stems: StemName[]) {
+  if (!stems.length) return "none" as const;
+  if (stems.includes("piano") || stems.includes("guitar")) return "6stems" as const;
+  if (stems.includes("drums") || stems.includes("bass") || stems.includes("other")) return "4stems" as const;
+  return "vocals" as const;
+}
+
 export function Uploader() {
   const { file, options, setFile, setOptions, startUpload, task } = useStore();
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const busy = task && task.status !== "completed" && task.status !== "failed";
 
   const currentMode = useMemo(() => deriveModeFromOptions(options), [options]);
@@ -97,16 +108,24 @@ export function Uploader() {
   const selectMode = (m: ModeDef) => {
     setOptions({
       ...m.toOptions(),
-      // 关掉所有「驯化」开关，强制 100% 保真
-      transposeToC: false,
-      simplifyMelody: false,
-      arrangementMode: "polyphonic",
-      forceMonophonic: false,
-      optimizePlayKey: false,
-      detectChords: false,
-      melodyMode: "auto",
-      quantizeGrid: 16,
+      fidelityMode: "raw",
+      separationQuality: options.separationQuality ?? "high",
     } as Partial<UploadOptions>);
+  };
+
+  const chosenStems = (options.stems ?? []) as StemName[];
+  const toggleStem = (stem: StemName) => {
+    const next = chosenStems.includes(stem)
+      ? chosenStems.filter((s) => s !== stem)
+      : [...chosenStems, stem];
+    const sepMode = deriveSeparationMode(next);
+    setOptions({
+      stems: next,
+      separationMode: sepMode,
+      transcribeStem: next.includes((options.transcribeStem as StemName) || "")
+        ? options.transcribeStem
+        : (next[0] ?? "original"),
+    });
   };
 
   return (
@@ -209,6 +228,90 @@ export function Uploader() {
       {/* ── 提示：100% 保真 ── */}
       <div className="text-[11px] text-emerald-400/80 bg-emerald-500/5 border border-emerald-500/20 rounded-md px-3 py-2">
         ✓ 100% 保真 · 全 0–127 音域 · 不移调 · 不量化 · 不限制同按数 · 完成后可导出 .mid
+      </div>
+
+      {/* ── 高级配置（保留全量控制） ── */}
+      <div className="rounded-xl border border-slate-800 bg-slate-900/40">
+        <button
+          type="button"
+          onClick={() => setShowAdvanced((v) => !v)}
+          className="w-full px-3 py-2.5 text-left flex items-center justify-between"
+        >
+          <span className="text-sm text-slate-200 flex items-center gap-2">
+            <SlidersHorizontal className="w-4 h-4" />
+            专业配置（分离轨道 / 目标轨 / 质量）
+          </span>
+          <span className="text-xs text-slate-500">{showAdvanced ? "收起" : "展开"}</span>
+        </button>
+        {showAdvanced && (
+          <div className="px-3 pb-3 space-y-3 border-t border-slate-800">
+            <div className="grid grid-cols-2 gap-2 pt-3">
+              <label className="text-xs text-slate-400">分离质量</label>
+              <select
+                value={options.separationQuality ?? "high"}
+                onChange={(e) => setOptions({ separationQuality: e.target.value as "fast" | "high" })}
+                className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs"
+              >
+                <option value="high">高质量（更稳）</option>
+                <option value="fast">快速（更快）</option>
+              </select>
+            </div>
+
+            <div>
+              <div className="text-xs text-slate-400 mb-2">保留分离轨道（可多选）</div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {ALL_STEMS.map((s) => {
+                  const on = chosenStems.includes(s);
+                  const meta = STEM_REGISTRY[s];
+                  return (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => toggleStem(s)}
+                      className={[
+                        "py-1.5 px-2 text-xs rounded-lg border transition",
+                        on ? "border-indigo-500 bg-indigo-500/10 text-indigo-100" : "border-slate-800 hover:border-slate-700 text-slate-300",
+                      ].join(" ")}
+                    >
+                      {meta.icon} {meta.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="text-[11px] text-slate-500 mt-1">
+                当前分离模式：{options.separationMode ?? "none"}
+              </div>
+            </div>
+
+            {(chosenStems.length > 0 || options.separationMode === "none") && (
+              <div className="grid grid-cols-2 gap-2">
+                <label className="text-xs text-slate-400">扒谱目标轨</label>
+                <select
+                  value={options.transcribeStem ?? (chosenStems[0] || "original")}
+                  onChange={(e) => setOptions({ transcribeStem: e.target.value as StemName })}
+                  className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs"
+                >
+                  {options.separationMode === "none" && <option value="original">原音</option>}
+                  {chosenStems.map((s) => (
+                    <option key={s} value={s}>{STEM_REGISTRY[s].label}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {(options.transcribeStem ?? chosenStems[0]) === "vocals" && (
+              <label className="flex items-center gap-2 text-xs text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={options.vocalToSky25 ?? true}
+                  onChange={(e) => setOptions({ vocalToSky25: e.target.checked })}
+                  className="accent-amber-400"
+                />
+                纯人声自动转调到 25 键可按演奏
+              </label>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── 开始按钮 ── */}

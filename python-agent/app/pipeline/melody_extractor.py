@@ -96,17 +96,76 @@ _LOG_A = _build_transition_matrix()
 
 # ── voicing 滞回 ─────────────────────────────────────────────
 
-def _voicing_hysteresis(voiced_prob: np.ndarray) -> np.ndarray:
-    """滞回阈值：进入需要 >ENTER，退出需要 <EXIT。消除边缘频繁开关。"""
+def _voicing_hysteresis(
+    voiced_prob: np.ndarray,
+    enter: float = VOICING_ENTER,
+    exit: float = VOICING_EXIT,
+) -> np.ndarray:
+    """滞回阈值：进入需要 >enter，退出需要 <exit。消除边缘频繁开关。"""
     out = np.zeros(len(voiced_prob), dtype=bool)
     state = False
     for i in range(len(voiced_prob)):
         v = voiced_prob[i]
         if state:
-            state = v > VOICING_EXIT
+            state = v > exit
         else:
-            state = v > VOICING_ENTER
+            state = v > enter
         out[i] = state
+    return out
+
+
+def _apply_energy_gate(voiced_mask: np.ndarray, energy: np.ndarray) -> np.ndarray:
+    """对浊音 mask 做能量门限，压掉静音区零散鬼音。"""
+    if len(voiced_mask) == 0 or len(energy) == 0:
+        return voiced_mask
+    e = energy[: len(voiced_mask)]
+    if len(e) < len(voiced_mask):
+        pad = np.full(len(voiced_mask) - len(e), float(e[-1]) if len(e) else 0.0)
+        e = np.concatenate([e, pad])
+
+    # 自适应阈值：地板噪声 + 动态范围的一小部分
+    noise_floor = float(np.percentile(e, 15))
+    peak = float(np.percentile(e, 99))
+    thr = noise_floor + max(1e-8, (peak - noise_floor) * 0.10)
+    return voiced_mask & (e >= thr)
+
+
+def _smooth_voiced_mask(
+    mask: np.ndarray,
+    min_on_frames: int = 3,
+    fill_off_frames: int = 2,
+) -> np.ndarray:
+    """平滑浊音掩码：去掉极短误检并填平极短断裂，减少漏检和碎音。"""
+    if len(mask) == 0:
+        return mask
+    out = mask.copy()
+
+    # 填补短空洞（True- False-True 中间 very short False）
+    i = 1
+    while i < len(out) - 1:
+        if out[i - 1] and not out[i]:
+            j = i
+            while j < len(out) and not out[j]:
+                j += 1
+            if j < len(out) and out[j] and (j - i) <= fill_off_frames:
+                out[i:j] = True
+            i = j
+        else:
+            i += 1
+
+    # 移除短毛刺（very short True islands）
+    i = 0
+    while i < len(out):
+        if not out[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(out) and out[j]:
+            j += 1
+        if (j - i) < min_on_frames:
+            out[i:j] = False
+        i = j
+
     return out
 
 
@@ -162,7 +221,7 @@ def _viterbi_decode(log_obs: np.ndarray, log_A: np.ndarray) -> np.ndarray:
 
 # ── 路径 → 音符 ──────────────────────────────────────────────
 
-def _path_to_notes(path: np.ndarray, frame_dt: float) -> List[dict]:
+def _path_to_notes(path: np.ndarray, frame_dt: float, min_note_sec: float = MIN_NOTE_SEC) -> List[dict]:
     """将 Viterbi 路径转为音符列表。"""
     notes: List[dict] = []
     if len(path) == 0:
@@ -177,7 +236,7 @@ def _path_to_notes(path: np.ndarray, frame_dt: float) -> List[dict]:
                 pitch = MIDI_MIN + (cur_state - 1)
                 start_sec = cur_start * frame_dt
                 end_sec = i * frame_dt
-                if end_sec - start_sec >= MIN_NOTE_SEC:
+                if end_sec - start_sec >= min_note_sec:
                     notes.append({
                         "pitch": pitch,
                         "start": start_sec,
@@ -192,7 +251,7 @@ def _path_to_notes(path: np.ndarray, frame_dt: float) -> List[dict]:
         pitch = MIDI_MIN + (cur_state - 1)
         start_sec = cur_start * frame_dt
         end_sec = len(path) * frame_dt
-        if end_sec - start_sec >= MIN_NOTE_SEC:
+        if end_sec - start_sec >= min_note_sec:
             notes.append({
                 "pitch": pitch,
                 "start": start_sec,
@@ -236,7 +295,7 @@ def _octave_correction(notes: List[dict], window_sec: float = 1.5) -> List[dict]
 
 # ── onset 拆分 ───────────────────────────────────────────────
 
-def _split_by_onsets(notes: List[dict], onset_times: List[float]) -> List[dict]:
+def _split_by_onsets(notes: List[dict], onset_times: List[float], min_note_sec: float = MIN_NOTE_SEC) -> List[dict]:
     """onset 强制拆分：同音连击不合并。"""
     if not notes or not onset_times:
         return notes
@@ -255,10 +314,10 @@ def _split_by_onsets(notes: List[dict], onset_times: List[float]) -> List[dict]:
 
         seg_start = start
         for cut in cuts:
-            if cut - seg_start >= MIN_NOTE_SEC:
+            if cut - seg_start >= min_note_sec:
                 out.append({**note, "start": seg_start, "end": cut})
                 seg_start = cut
-        if end - seg_start >= MIN_NOTE_SEC:
+        if end - seg_start >= min_note_sec:
             out.append({**note, "start": seg_start, "end": end})
 
     return out
@@ -266,7 +325,7 @@ def _split_by_onsets(notes: List[dict], onset_times: List[float]) -> List[dict]:
 
 # ── 合并极短间隔 ─────────────────────────────────────────────
 
-def _merge_short_gaps(notes: List[dict], onset_times: List[float]) -> List[dict]:
+def _merge_short_gaps(notes: List[dict], onset_times: List[float], merge_gap_sec: float = MERGE_GAP_SEC) -> List[dict]:
     """合并极短间隔的同音符（但 onset 处不合并）。"""
     if not notes:
         return notes
@@ -283,7 +342,7 @@ def _merge_short_gaps(notes: List[dict], onset_times: List[float]) -> List[dict]
         gap = n["start"] - last["end"]
         if (
             n["pitch"] == last["pitch"]
-            and gap < MERGE_GAP_SEC
+            and gap < merge_gap_sec
             and gap >= 0
             and not _has_onset_between(last["end"] - 0.001, n["start"] + 0.001)
         ):
@@ -296,8 +355,8 @@ def _merge_short_gaps(notes: List[dict], onset_times: List[float]) -> List[dict]
 
 # ── F0 后端 ──────────────────────────────────────────────────
 
-def _pyin_f0(audio_path: str) -> Tuple[np.ndarray, np.ndarray, float, List[float]]:
-    """PYIN 后端：返回 (f0_hz, voiced_prob, frame_dt, onset_times)。"""
+def _pyin_f0(audio_path: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float, List[float]]:
+    """PYIN 后端：返回 (f0_hz, voiced_prob, energy, frame_dt, onset_times)。"""
     import librosa
 
     y, sr = librosa.load(audio_path, sr=SR, mono=True)
@@ -308,6 +367,7 @@ def _pyin_f0(audio_path: str) -> Tuple[np.ndarray, np.ndarray, float, List[float
     )
     voiced_prob = np.nan_to_num(voiced_prob, nan=0.0)
     frame_dt = HOP_LENGTH / sr
+    rms = librosa.feature.rms(y=y, frame_length=2048, hop_length=HOP_LENGTH)[0]
 
     onset_frames = librosa.onset.onset_detect(
         y=y, sr=sr, hop_length=HOP_LENGTH, units="frames", backtrack=False,
@@ -316,10 +376,10 @@ def _pyin_f0(audio_path: str) -> Tuple[np.ndarray, np.ndarray, float, List[float
         onset_frames, sr=sr, hop_length=HOP_LENGTH
     ).tolist()
 
-    return f0, voiced_prob, frame_dt, onset_times
+    return f0, voiced_prob, rms.astype(np.float64), frame_dt, onset_times
 
 
-def _crepe_f0(audio_path: str) -> Tuple[np.ndarray, np.ndarray, float, List[float]]:
+def _crepe_f0(audio_path: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float, List[float]]:
     """TorchCREPE 后端：精度更高，需 pip install torchcrepe。"""
     import torchcrepe
     import torchaudio
@@ -351,7 +411,13 @@ def _crepe_f0(audio_path: str) -> Tuple[np.ndarray, np.ndarray, float, List[floa
         onset_frames, sr=y_sr, hop_length=HOP_LENGTH
     ).tolist()
 
-    return f0_hz, voiced_prob, frame_dt, onset_times
+    # 统一能量序列到 CREPE 帧长度
+    rms = librosa.feature.rms(y=y, frame_length=2048, hop_length=HOP_LENGTH)[0]
+    rms_times = np.arange(len(rms), dtype=np.float64) * (HOP_LENGTH / y_sr)
+    crepe_times = np.arange(len(f0_hz), dtype=np.float64) * frame_dt
+    energy = np.interp(crepe_times, rms_times, rms, left=rms[0] if len(rms) else 0.0, right=rms[-1] if len(rms) else 0.0)
+
+    return f0_hz, voiced_prob, energy.astype(np.float64), frame_dt, onset_times
 
 
 # ── 主入口 ───────────────────────────────────────────────────
@@ -362,6 +428,7 @@ def extract(
     backend: str = "pyin",
     voiced_thresh: float = VOICING_ENTER,  # 兼容旧接口（实际使用滞回）
     min_note_sec: float = MIN_NOTE_SEC,
+    merge_gap_sec: float = MERGE_GAP_SEC,
 ) -> Tuple[List[dict], float]:
     """
     v2 主入口：F0 估计 + Viterbi HMM 段化 + 八度纠错 + onset 拆分。
@@ -377,15 +444,19 @@ def extract(
     # 1. F0 估计
     if backend == "crepe":
         try:
-            f0, voiced_prob, frame_dt, onset_times = _crepe_f0(audio_path)
+            f0, voiced_prob, energy, frame_dt, onset_times = _crepe_f0(audio_path)
         except ImportError:
             logger.warning("[melody-v2] torchcrepe not installed, falling back to pyin")
-            f0, voiced_prob, frame_dt, onset_times = _pyin_f0(audio_path)
+            f0, voiced_prob, energy, frame_dt, onset_times = _pyin_f0(audio_path)
     else:
-        f0, voiced_prob, frame_dt, onset_times = _pyin_f0(audio_path)
+        f0, voiced_prob, energy, frame_dt, onset_times = _pyin_f0(audio_path)
 
     # 2. voicing 滞回
-    voiced_mask = _voicing_hysteresis(voiced_prob)
+    enter = float(np.clip(voiced_thresh, 0.30, 0.85))
+    exit = max(0.15, enter - 0.20)
+    voiced_mask = _voicing_hysteresis(voiced_prob, enter=enter, exit=exit)
+    voiced_mask = _apply_energy_gate(voiced_mask, energy)
+    voiced_mask = _smooth_voiced_mask(voiced_mask, min_on_frames=3, fill_off_frames=2)
 
     # 3. 观测矩阵
     log_obs = _compute_observations(f0, voiced_mask)
@@ -394,16 +465,16 @@ def extract(
     path = _viterbi_decode(log_obs, _LOG_A)
 
     # 5. 路径 → 音符
-    notes = _path_to_notes(path, frame_dt)
+    notes = _path_to_notes(path, frame_dt, min_note_sec=min_note_sec)
 
     # 6. 八度纠错
     notes = _octave_correction(notes)
 
     # 7. onset 拆分同音连击
-    notes = _split_by_onsets(notes, onset_times)
+    notes = _split_by_onsets(notes, onset_times, min_note_sec=min_note_sec)
 
     # 8. 合并极短间隔
-    notes = _merge_short_gaps(notes, onset_times)
+    notes = _merge_short_gaps(notes, onset_times, merge_gap_sec=merge_gap_sec)
 
     # 9. BPM
     if bpm is None:

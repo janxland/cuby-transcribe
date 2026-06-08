@@ -60,10 +60,24 @@ def _basic_pitch_raw(audio_path: str) -> List[dict]:
     return notes
 
 
-def _pyin_raw(audio_path: str, bpm: Optional[float]) -> List[dict]:
-    """对人声 stem 用 PYIN+Viterbi 单音旋律线。"""
+def _pyin_raw(
+    audio_path: str,
+    bpm: Optional[float],
+    backend: str = "pyin",
+    min_note_sec: float = 0.10,
+    merge_gap_sec: float = 0.08,
+    voiced_thresh: float = 0.60,
+) -> List[dict]:
+    """对人声 stem 用单音旋律线（默认 PYIN；可选 CREPE）。"""
     from . import melody_extractor
-    notes, _ = melody_extractor.extract(audio_path, bpm=bpm)
+    notes, _ = melody_extractor.extract(
+        audio_path,
+        bpm=bpm,
+        backend=backend,
+        voiced_thresh=voiced_thresh,
+        min_note_sec=min_note_sec,
+        merge_gap_sec=merge_gap_sec,
+    )
     return notes
 
 
@@ -104,6 +118,10 @@ def _to_score_note(n: dict) -> dict:
 def transcribe_stems(
     stem_paths: Dict[str, str],
     bpm: Optional[float] = None,
+    melody_backend: str = "pyin",
+    vocal_min_note_sec: float = 0.10,
+    vocal_merge_gap_sec: float = 0.08,
+    vocal_voiced_thresh: float = 0.60,
 ) -> Tuple[List[dict], Dict[str, str]]:
     """对所有给定 stem 并行转录，返回 (tracks, algo_per_stem)。
 
@@ -125,7 +143,15 @@ def transcribe_stems(
             logger.info(f"[raw] skip stem '{name}' (no pitched content)")
             continue
         if algo == "pyin":
-            futures[name] = pool.submit(_pyin_raw, path, bpm)
+            futures[name] = pool.submit(
+                _pyin_raw,
+                path,
+                bpm,
+                melody_backend,
+                vocal_min_note_sec,
+                vocal_merge_gap_sec,
+                vocal_voiced_thresh,
+            )
         else:
             futures[name] = pool.submit(_basic_pitch_raw, path)
 

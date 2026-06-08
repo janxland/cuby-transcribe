@@ -3,12 +3,14 @@ export type TaskStatus = "queued" | "processing" | "completed" | "failed";
 export interface TaskOptions {
   /** 'raw' = 100% 保真多 stem 多 track（默认）/ 'arranged' = 旧版光遇键盘适配 */
   fidelityMode?: "raw" | "arranged";
+  separationQuality?: "fast" | "high";
   transposeToC?: boolean;
   quantizeGrid?: 8 | 16;
   simplifyMelody?: boolean;
   separationMode?: "none" | "vocals" | "4stems" | "6stems";
   transcribeStem?:
     | "original" | "vocals" | "no_vocals" | "drums" | "bass" | "other" | "piano" | "guitar";
+  vocalToSky25?: boolean;
   /** 用户希望保留的 stem 列表 */
   stems?: string[];
   /** v2: polyphonic 保留和弦 / monophonic 单音 */
