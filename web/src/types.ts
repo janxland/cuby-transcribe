@@ -52,6 +52,8 @@ export interface Metadata {
   fidelityMode?: "raw" | "arranged";
   /** raw 模式下每条 stem 用了什么算法 */
   perStemAlgo?: Record<string, string> | null;
+  /** BPM 来源：user(手填) / detected(自动检测) / refined(自动纠偏) */
+  tempoSource?: "user" | "detected" | "refined" | string;
 }
 
 export interface ChordSegment {
@@ -62,7 +64,7 @@ export interface ChordSegment {
   quality: string;   // "maj"|"min"|...
 }
 
-export type TaskStatus = "queued" | "processing" | "completed" | "failed";
+export type TaskStatus = "queued" | "processing" | "completed" | "failed" | "canceled";
 
 export type SeparationMode = "none" | "vocals" | "4stems" | "6stems";
 
@@ -111,4 +113,6 @@ export interface UploadOptions {
   forceMonophonic?: boolean;
   /** 开启后枚举最佳可弹奏调，输出推荐「升降调键」 */
   optimizePlayKey?: boolean;
+  /** 手动 BPM；留空时自动检测并纠偏 */
+  manualBpm?: number | null;
 }

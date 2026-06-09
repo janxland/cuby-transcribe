@@ -101,7 +101,7 @@ export function Uploader() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const busy = task && task.status !== "completed" && task.status !== "failed";
+  const busy = task && task.status !== "completed" && task.status !== "failed" && task.status !== "canceled";
 
   const currentMode = useMemo(() => deriveModeFromOptions(options), [options]);
 
@@ -255,6 +255,29 @@ export function Uploader() {
                 <option value="high">高质量（更稳）</option>
                 <option value="fast">快速（更快）</option>
               </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <label className="text-xs text-slate-400">BPM（留空自动）</label>
+              <input
+                type="number"
+                min={30}
+                max={280}
+                step={0.1}
+                value={options.manualBpm ?? ""}
+                onChange={(e) => {
+                  const v = e.target.value.trim();
+                  if (!v) {
+                    setOptions({ manualBpm: null });
+                    return;
+                  }
+                  const n = Number(v);
+                  if (!Number.isFinite(n)) return;
+                  setOptions({ manualBpm: Math.max(30, Math.min(280, n)) });
+                }}
+                placeholder="自动匹配最佳 BPM"
+                className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs"
+              />
             </div>
 
             <div>

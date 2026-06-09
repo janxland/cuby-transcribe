@@ -31,3 +31,13 @@ export function retranscribeStem(
     signal,
   });
 }
+
+export function cancelTranscribeTask(
+  taskId: string,
+  signal?: AbortSignal,
+): Promise<{ taskId: string; status: string; message: string }> {
+  return request(`/api/transcribe/${taskId}/cancel`, {
+    method: "POST",
+    signal,
+  });
+}

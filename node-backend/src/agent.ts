@@ -2,8 +2,19 @@ import axios from "axios";
 import { updateTask, type Task, type StemInfo } from "./store.js";
 
 const AGENT_URL = process.env.PYTHON_AGENT_URL || "http://localhost:8000";
+const taskControllers = new Map<string, AbortController>();
+
+export function cancelRunningTask(taskId: string): boolean {
+  const ctrl = taskControllers.get(taskId);
+  if (!ctrl) return false;
+  ctrl.abort();
+  taskControllers.delete(taskId);
+  return true;
+}
 
 export async function runTask(task: Task) {
+  const ctrl = new AbortController();
+  taskControllers.set(task.taskId, ctrl);
   try {
     const sep = task.options.separationMode ?? "none";
     updateTask(task.taskId, {
@@ -18,7 +29,7 @@ export async function runTask(task: Task) {
         options: task.options,
         taskId: task.taskId,        // 让 Python 用同一个 id，方便 stems URL 一致
       },
-      { timeout: 30 * 60 * 1000 }
+      { timeout: 30 * 60 * 1000, signal: ctrl.signal }
     );
     const { cubyScore, metadata, stems = [], taskId: agentId } = resp.data;
 
@@ -39,6 +50,15 @@ export async function runTask(task: Task) {
       agentTaskId: agentId,
     });
   } catch (err: any) {
+    if (err?.code === "ERR_CANCELED") {
+      updateTask(task.taskId, {
+        status: "canceled",
+        progress: 0,
+        message: "canceled",
+        error: undefined,
+      });
+      return;
+    }
     const detail = err?.response?.data?.detail || err?.message || String(err);
     updateTask(task.taskId, {
       status: "failed",
@@ -46,6 +66,8 @@ export async function runTask(task: Task) {
       message: "failed",
       error: detail,
     });
+  } finally {
+    taskControllers.delete(task.taskId);
   }
 }
 

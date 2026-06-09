@@ -59,6 +59,9 @@ class ProcessOptions(BaseModel):
     # 与 transposeToC 互斥：若同时开，optimizePlayKey 优先。
     optimizePlayKey: bool = False
 
+    # 手动指定 BPM；为 None 时走自动检测 + 智能纠偏
+    manualBpm: Optional[float] = None
+
 
 class ProcessRequest(BaseModel):
     audioPath: str
@@ -134,6 +137,8 @@ class Metadata(BaseModel):
     fidelityMode: str = "arranged"
     # raw 模式下，每条 stem 实际使用的算法
     perStemAlgo: Optional[dict] = None
+    # BPM 来源：user(用户手填) / detected(librosa) / refined(自动纠偏)
+    tempoSource: Optional[str] = None
 
 
 class ProcessResponse(BaseModel):

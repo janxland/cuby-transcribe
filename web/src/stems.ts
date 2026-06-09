@@ -58,6 +58,14 @@ export function deriveMode(stems: readonly StemName[]): SeparationMode {
 }
 
 export function stemMeta(name: string): StemMeta {
+  if (name === "multi") {
+    return {
+      icon: "🎼",
+      label: "多轨合并",
+      color: "from-indigo-500 to-violet-600",
+      rgb: "#818cf8",
+    };
+  }
   return STEM_REGISTRY[name] ?? { ...FALLBACK_META, label: name };
 }
 

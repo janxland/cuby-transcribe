@@ -18,6 +18,50 @@ MIN_VELOCITY = 18
 MAX_DENSITY = 8  # 每 100ms 窗口最大音符数
 
 
+def _dedup_onsets(notes: List[dict], bucket_sec: float = 0.03) -> List[float]:
+    if not notes:
+        return []
+    onsets = sorted(float(n.get("start", 0.0)) for n in notes)
+    deduped: List[float] = []
+    last = -1e9
+    for t in onsets:
+        if t - last >= bucket_sec:
+            deduped.append(t)
+            last = t
+    return deduped
+
+
+def refine_bpm_from_notes(base_bpm: float, notes: List[dict]) -> Tuple[float, str]:
+    """用音符起始间隔修正 BPM 的半拍/倍拍误判。
+
+    返回 (bpm, source)，source 取值：
+      - detected: 未做修正
+      - refined: 自动纠偏后
+    """
+    if not notes or base_bpm <= 0:
+        return float(base_bpm or 120.0), "detected"
+
+    onsets = _dedup_onsets(notes)
+    if len(onsets) < 6:
+        return float(base_bpm), "detected"
+
+    iois = np.diff(np.array(onsets, dtype=np.float64))
+    iois = iois[(iois >= 0.05) & (iois <= 2.0)]
+    if iois.size < 5:
+        return float(base_bpm), "detected"
+
+    median_ioi = float(np.median(iois))
+    bpm = float(base_bpm)
+
+    # 经验规则：检测到双倍速时常见 median IOI 偏大；检测到半速时 median IOI 偏小。
+    if bpm >= 120.0 and median_ioi >= 0.38:
+        return round(bpm / 2.0, 2), "refined"
+    if bpm <= 72.0 and median_ioi <= 0.22:
+        return round(bpm * 2.0, 2), "refined"
+
+    return float(round(bpm, 2)), "detected"
+
+
 def detect_bpm(audio_path: str) -> float:
     """独立的 BPM 探测，供 processor 在分离阶段后台并行调用。"""
     try:

@@ -7,7 +7,7 @@
  */
 import { create } from "zustand";
 import type { CubyScore, Metadata, StemInfo, TaskState, UploadOptions } from "@/types";
-import { getTask, retranscribeStem, uploadAudio } from "@/api";
+import { cancelTranscribeTask, getTask, retranscribeStem, uploadAudio } from "@/api";
 import { toAppError } from "@/lib/http";
 import { parseMidiFile } from "@/utils/midiParser";
 import { toneClock } from "@/utils/toneClock";
@@ -67,6 +67,7 @@ interface Store {
   updateScoreNotes: (stem: string, notes: CubyScore["tracks"][number]["notes"]) => void;
   startUpload: () => Promise<void>;
   retranscribeWith: (stem: string) => Promise<void>;
+  cancelCurrentTask: () => Promise<void>;
   /** 直接加载本地 .mid/.midi 文件为可播放谱子 */
   loadMidiFile: (file: File) => Promise<void>;
   reset: () => void;
@@ -89,6 +90,7 @@ const DEFAULT_OPTIONS: UploadOptions = {
   detectChords: false,
   forceMonophonic: false,
   optimizePlayKey: false,
+  manualBpm: null,
 };
 
 const POLL_INTERVAL_MS = 1200;
@@ -131,15 +133,17 @@ function mergeScore(
   score: CubyScore,
   meta: Metadata,
 ): { scores: Record<string, ScoreEntry>; activeStems: string[] } {
-  // 后端 raw 多轨会以 transcribedStem='multi' 返回：
-  // 这里按 track 拆成独立通道，保证用户可按通道单独演奏/停止。
+  // raw 多轨结果拆成可选通道，供用户按通道开关演奏。
   if (meta.transcribedStem === "multi" && (score.tracks?.length ?? 0) > 1) {
     const nextScores: Record<string, ScoreEntry> = { ...prevScores };
+    // 兼容历史数据：清掉遗留的 multi 聚合项，避免 UI 同时出现 multi 与分轨条目。
+    delete nextScores.multi;
     const added: string[] = [];
     const used = new Set<string>();
 
     for (const tr of score.tracks ?? []) {
       if (!tr?.notes?.length) continue;
+
       let stem = (tr.name || tr.id || "track").trim();
       if (!stem) stem = "track";
       if (used.has(stem)) {
@@ -357,6 +361,39 @@ export const useStore = create<Store>((set, get) => ({
       set({ task: { taskId: "", status: "failed", progress: 0, message: "failed", error: err.message } });
     }
   },
+
+  cancelCurrentTask: async () => {
+    const task = get().task;
+    if (!task?.taskId) return;
+
+    // 先停止本地轮询/上传，避免继续占用前端资源。
+    activeJob?.ctrl.abort();
+    activeJob = null;
+
+    try {
+      const r = await cancelTranscribeTask(task.taskId);
+      set({
+        task: {
+          ...(get().task ?? task),
+          status: "canceled",
+          progress: 0,
+          message: r.message || "canceled",
+          error: undefined,
+        },
+      });
+    } catch (e) {
+      const err = toAppError(e);
+      set({
+        task: {
+          ...(get().task ?? task),
+          status: "failed",
+          progress: 0,
+          message: "cancel failed",
+          error: err.message,
+        },
+      });
+    }
+  },
 }));
 
 async function pollUntilDone(
@@ -371,7 +408,7 @@ async function pollUntilDone(
       const s = await getTask(taskId, job.ctrl.signal);
       if (!isCurrent(job)) return;
       onUpdate(s);
-      if (s.status === "completed" || s.status === "failed") return;
+      if (s.status === "completed" || s.status === "failed" || s.status === "canceled") return;
     } catch (e) {
       if (!isCurrent(job)) return;
       const err = toAppError(e);

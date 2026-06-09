@@ -4,9 +4,9 @@ import cors from "@fastify/cors";
 import fs from "node:fs";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import { createTask, getTask } from "./store.js";
+import { createTask, getTask, updateTask } from "./store.js";
 import type { TaskOptions } from "./store.js";
-import { runTask, PYTHON_AGENT_URL } from "./agent.js";
+import { runTask, PYTHON_AGENT_URL, cancelRunningTask } from "./agent.js";
 
 const PORT = Number(process.env.PORT) || 3000;
 const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || "./uploads");
@@ -65,6 +65,39 @@ app.get("/api/transcribe/:taskId", async (req, reply) => {
     metadata: task.metadata,
     stems: task.stems ?? [],
     error: task.error,
+  };
+});
+
+app.post("/api/transcribe/:taskId/cancel", async (req, reply) => {
+  const { taskId } = req.params as { taskId: string };
+  const task = getTask(taskId);
+  if (!task) return reply.code(404).send({ error: "not found" });
+
+  if (task.status === "completed" || task.status === "failed" || task.status === "canceled") {
+    return {
+      taskId: task.taskId,
+      status: task.status,
+      message: task.message,
+    };
+  }
+
+  cancelRunningTask(taskId);
+  updateTask(taskId, {
+    status: "canceled",
+    progress: 0,
+    message: "canceled",
+    error: undefined,
+  });
+
+  // 终止后尽快释放上传文件（失败时忽略）。
+  if (task.audioPath) {
+    fs.promises.unlink(task.audioPath).catch(() => undefined);
+  }
+
+  return {
+    taskId: task.taskId,
+    status: "canceled",
+    message: "canceled",
   };
 });
 

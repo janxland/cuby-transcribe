@@ -1,4 +1,4 @@
-export type TaskStatus = "queued" | "processing" | "completed" | "failed";
+export type TaskStatus = "queued" | "processing" | "completed" | "failed" | "canceled";
 
 export interface TaskOptions {
   /** 'raw' = 100% 保真多 stem 多 track（默认）/ 'arranged' = 旧版光遇键盘适配 */
@@ -23,6 +23,7 @@ export interface TaskOptions {
   forceMonophonic?: boolean;
   melodyMode?: "auto" | "vocal";
   optimizePlayKey?: boolean;
+  manualBpm?: number | null;
 }
 
 export interface StemInfo {

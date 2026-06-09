@@ -129,10 +129,14 @@ def run(audio_path: str, options: ProcessOptions, task_id: str | None = None) ->
     # 无分离 + 未指定 → 视为原曲。分离流程下若实际找到对应 stem 会再次确认。
     transcribed_stem = options.transcribeStem or "original"
 
-    # BPM 一定从 **原曲** 测，且与「分离」阶段后台并行 —— 节省最长一段串行时间
-    bpm_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bpm")
-    bpm_future: Future = bpm_pool.submit(transcriber.detect_bpm, audio_path)
-    bpm_pool.shutdown(wait=False)
+    # BPM：优先用户手动值；否则从原曲检测，并在后续按音符分布自动纠偏。
+    manual_bpm = float(options.manualBpm) if options.manualBpm and options.manualBpm > 0 else None
+    bpm_source = "user" if manual_bpm is not None else "detected"
+    bpm_future: Optional[Future] = None
+    if manual_bpm is None:
+        bpm_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bpm")
+        bpm_future = bpm_pool.submit(transcriber.detect_bpm, audio_path)
+        bpm_pool.shutdown(wait=False)
 
     if options.separationMode != "none":
         from . import separator
@@ -163,11 +167,14 @@ def run(audio_path: str, options: ProcessOptions, task_id: str | None = None) ->
             audio_for_transcribe = audio_path
 
     # 等 BPM 拿回来（多数情况此时已 done）
-    try:
-        precomputed_bpm: Optional[float] = bpm_future.result(timeout=30)
-    except Exception as e:
-        logger.warning(f"[bpm] future failed: {e}")
-        precomputed_bpm = None
+    if manual_bpm is not None:
+        precomputed_bpm: Optional[float] = manual_bpm
+    else:
+        try:
+            precomputed_bpm = bpm_future.result(timeout=30) if bpm_future else None
+        except Exception as e:
+            logger.warning(f"[bpm] future failed: {e}")
+            precomputed_bpm = None
 
     # —— 选择旋律提取算法 ——
     # melodyMode='vocal' 且当前扒的是人声轨 → 走 PYIN 单音；否则回退 Basic Pitch
@@ -182,6 +189,9 @@ def run(audio_path: str, options: ProcessOptions, task_id: str | None = None) ->
         raw_notes, bpm = transcriber.transcribe(audio_for_transcribe, bpm=precomputed_bpm)
     if not raw_notes:
         raise RuntimeError("No notes detected from audio")
+
+    if manual_bpm is None:
+        bpm, bpm_source = transcriber.refine_bpm_from_notes(bpm, raw_notes)
 
     # —— 编配模式（v2）——
     # 旧字段 forceMonophonic 等价于 arrangementMode='monophonic'，二者并集。
@@ -326,6 +336,7 @@ def run(audio_path: str, options: ProcessOptions, task_id: str | None = None) ->
         ] if chord_segments else None,
         recommendedShift=recommended_shift,
         playableKey=playable_key,
+        tempoSource=bpm_source,
     )
 
     return {
@@ -357,10 +368,14 @@ def _run_raw(
     """
     stems: list[StemInfo] = []
 
-    # —— 1. BPM 并行测算（仅元数据用） ——
-    bpm_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bpm-raw")
-    bpm_future: Future = bpm_pool.submit(transcriber.detect_bpm, audio_path)
-    bpm_pool.shutdown(wait=False)
+    # —— 1. BPM：优先用户手动值；否则并行测算（仅元数据用） ——
+    manual_bpm = float(options.manualBpm) if options.manualBpm and options.manualBpm > 0 else None
+    bpm_source = "user" if manual_bpm is not None else "detected"
+    bpm_future: Optional[Future] = None
+    if manual_bpm is None:
+        bpm_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bpm-raw")
+        bpm_future = bpm_pool.submit(transcriber.detect_bpm, audio_path)
+        bpm_pool.shutdown(wait=False)
 
     # —— 2. 分离（raw 默认仍尊重用户的 separationMode）——
     stem_paths: dict[str, str] = {}
@@ -380,11 +395,15 @@ def _run_raw(
             ))
 
     # —— 3. BPM 等回 ——
-    try:
-        bpm: float = bpm_future.result(timeout=30) or 120.0
-    except Exception as e:
-        logger.warning(f"[raw] bpm failed: {e}")
-        bpm = 120.0
+    if manual_bpm is not None:
+        bpm = manual_bpm
+    else:
+        try:
+            bpm = bpm_future.result(timeout=30) if bpm_future else 120.0
+            bpm = float(bpm or 120.0)
+        except Exception as e:
+            logger.warning(f"[raw] bpm failed: {e}")
+            bpm = 120.0
 
     # —— 4. 转录 ——
     recommended_shift: Optional[int] = None
@@ -405,6 +424,7 @@ def _run_raw(
             vocal_merge_gap_sec=vocal_merge_gap_sec,
             vocal_voiced_thresh=vocal_voiced_thresh,
         )
+        tracks_data, algos = raw_transcriber.split_two_hand_tracks(tracks_data, algos)
         if not tracks_data:
             # 所有 stem 都失败 → 退回整曲转录
             logger.warning("[raw] all stems empty, fall back to full mix")
@@ -426,6 +446,7 @@ def _run_raw(
             "notes": [raw_transcriber._to_score_note(n) for n in full_notes],
         }]
         algos = {"original": "basic_pitch"}
+        tracks_data, algos = raw_transcriber.split_two_hand_tracks(tracks_data, algos)
 
     # —— 4.5 人声目标可演奏化：转到 25 键范围（默认开启）——
     if options.vocalToSky25 and options.transcribeStem == "vocals":
@@ -472,6 +493,17 @@ def _run_raw(
 
     duration = max((n["time"] + n["duration"] for n in all_notes), default=0.0)
     note_count = len(all_notes)
+    if manual_bpm is None and all_notes:
+        refine_input = [
+            {
+                "pitch": n["pitch"],
+                "start": n["time"],
+                "end": n["time"] + n["duration"],
+            }
+            for n in all_notes
+        ]
+        bpm, bpm_source = transcriber.refine_bpm_from_notes(bpm, refine_input)
+
     title = os.path.splitext(os.path.basename(audio_path))[0]
 
     score = CubyScore(
@@ -507,6 +539,7 @@ def _run_raw(
         playableKey=playable_key,
         fidelityMode="raw",
         perStemAlgo=algos or None,
+        tempoSource=bpm_source,
     )
 
     return {

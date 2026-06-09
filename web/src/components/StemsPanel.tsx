@@ -27,7 +27,7 @@ export function StemsPanel({ withTransport = true }: Props = {}) {
       </div>
     );
   }
-  const busy = !!task && task.status !== "completed" && task.status !== "failed";
+  const busy = !!task && task.status !== "completed" && task.status !== "failed" && task.status !== "canceled";
   const bpm = meta?.bpm;
   const transcribedStems = Object.keys(scores);
   // 「重扒」需要后端有分离出的 stem 文件；当列表只剩前端注入的 synthetic 'original'

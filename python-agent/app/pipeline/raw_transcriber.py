@@ -29,6 +29,7 @@ from loguru import logger
 # 仅做极弱毛刺剔除，不做音域/密度过滤
 _RAW_MIN_DUR = 0.025
 _RAW_MIN_VEL = 8
+_TWO_HAND_SOURCES = {"no_vocals", "original", "other", "piano", "guitar"}
 
 
 def _basic_pitch_raw(audio_path: str) -> List[dict]:
@@ -113,6 +114,127 @@ def _to_score_note(n: dict) -> dict:
         "duration": round(float(n["end"]) - float(n["start"]), 4),
         "velocity": int(n.get("velocity", 90)),
     }
+
+
+def _median(values: List[float]) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return float(ordered[mid])
+    return float(ordered[mid - 1] + ordered[mid]) / 2.0
+
+
+def _split_two_hands(track: dict, grid_sec: float = 0.08) -> List[dict]:
+    """把单条复音伴奏轨拆成左右手两条钢琴轨，尽量贴近 MIDISHOW 的双钢琴结构。"""
+    notes = list(track.get("notes") or [])
+    if len(notes) < 32:
+        return [track]
+
+    pitches = [int(n["pitch"]) for n in notes]
+    if max(pitches) - min(pitches) < 18:
+        return [track]
+
+    t_end = max((float(n["time"]) + float(n["duration"]) for n in notes), default=0.0)
+    if t_end <= 0:
+        return [track]
+
+    split_samples: List[List[float]] = [[] for _ in notes]
+    n_frames = max(1, int(t_end / grid_sec) + 1)
+    poly_frames = 0
+    wide_poly_frames = 0
+
+    for frame_idx in range(n_frames):
+        t0 = frame_idx * grid_sec
+        t1 = t0 + grid_sec
+        active: List[tuple[int, dict]] = []
+        for idx, note in enumerate(notes):
+            start = float(note["time"])
+            end = start + float(note["duration"])
+            if start < t1 and end > t0:
+                active.append((idx, note))
+        if len(active) < 2:
+            continue
+
+        poly_frames += 1
+        active.sort(key=lambda item: (int(item[1]["pitch"]), float(item[1]["time"])))
+        low_pitch = int(active[0][1]["pitch"])
+        high_pitch = int(active[-1][1]["pitch"])
+        if high_pitch - low_pitch < 7:
+            continue
+
+        wide_poly_frames += 1
+        boundary = (low_pitch + high_pitch) / 2.0
+        for idx, _note in active:
+            split_samples[idx].append(boundary)
+
+    if poly_frames < 8 or wide_poly_frames < 4:
+        return [track]
+
+    global_split = _median([sample for samples in split_samples for sample in samples])
+    if global_split <= 0:
+        global_split = _median([float(p) for p in pitches])
+
+    right_hand: List[dict] = []
+    left_hand: List[dict] = []
+    for idx, note in enumerate(notes):
+        local_split = _median(split_samples[idx]) if split_samples[idx] else global_split
+        target = right_hand if float(note["pitch"]) >= local_split else left_hand
+        target.append(note)
+
+    min_hand_notes = max(12, int(len(notes) * 0.15))
+    if len(right_hand) < min_hand_notes or len(left_hand) < min_hand_notes:
+        return [track]
+
+    left_hand.sort(key=lambda n: (float(n["time"]), int(n["pitch"])))
+    right_hand.sort(key=lambda n: (float(n["time"]), int(n["pitch"])))
+
+    return [
+        {
+            "id": track.get("id", "track") + "_rh",
+            "name": "Piano RH",
+            "instrument": "Grand Piano",
+            "notes": right_hand,
+        },
+        {
+            "id": track.get("id", "track") + "_lh",
+            "name": "Piano LH",
+            "instrument": "Grand Piano",
+            "notes": left_hand,
+        },
+    ]
+
+
+def split_two_hand_tracks(tracks: List[dict], algos: Dict[str, str]) -> Tuple[List[dict], Dict[str, str]]:
+    """对适合的 raw 轨道做左右手钢琴分轨；不满足条件时保持原样。"""
+    if not tracks:
+        return tracks, algos
+
+    out_tracks: List[dict] = []
+    out_algos: Dict[str, str] = {}
+    next_id = 1
+
+    for track in tracks:
+        source_name = str(track.get("name") or "")
+        split_tracks = [track]
+        if source_name in _TWO_HAND_SOURCES:
+            split_tracks = _split_two_hands(track)
+            if len(split_tracks) == 2:
+                logger.info(
+                    f"[raw] split '{source_name}' -> RH {len(split_tracks[0]['notes'])} / LH {len(split_tracks[1]['notes'])}"
+                )
+
+        for part in split_tracks:
+            normalized = {
+                **part,
+                "id": f"track_{next_id}",
+            }
+            next_id += 1
+            out_tracks.append(normalized)
+            out_algos[normalized["name"]] = algos.get(source_name, algos.get(normalized["name"], "basic_pitch"))
+
+    return out_tracks, out_algos
 
 
 def transcribe_stems(
