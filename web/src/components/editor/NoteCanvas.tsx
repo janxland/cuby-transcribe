@@ -28,6 +28,7 @@ interface Props {
   duration: number;       // 谱面总时长（秒，用于画网格 / 容器宽）
   playheadTime?: number;
   onAuditionNote?: (pitch: number, velocity: number, duration: number) => void;
+  onBlankSeek?: (timeSec: number) => void;
 }
 
 type Interaction =
@@ -37,6 +38,7 @@ type Interaction =
 
 export function NoteCanvas({
   api, viewport, grid, bpm, tool, duration, playheadTime, onAuditionNote,
+  onBlankSeek,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const interactionRef = useRef<Interaction | null>(null);
@@ -116,6 +118,9 @@ export function NoteCanvas({
 
     // 空白
     api.clearSelection();
+    if (tool === "select") {
+      onBlankSeek?.(Math.max(0, xToTime(x, viewport)));
+    }
     if (tool === "draw") {
       const pitch = clampPitch(yToPitch(y, viewport), viewport);
       const t0 = snapTime(xToTime(x, viewport), bpm, grid);

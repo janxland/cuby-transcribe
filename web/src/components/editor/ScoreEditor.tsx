@@ -13,8 +13,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStoreShallow } from "@/selectors";
 import { stemMeta } from "@/stems";
+import { useStore } from "@/store";
 import { useMixerOptional } from "../mixer";
 import { Transport } from "../mixer/Transport";
+import { ToneTransport } from "../ToneTransport";
 import { playNote } from "../synth";
 import { EditorToolbar } from "./EditorToolbar";
 import { NoteCanvas } from "./NoteCanvas";
@@ -23,6 +25,16 @@ import { VelocityLane } from "./VelocityLane";
 import { fromScoreNotes } from "./types";
 import type { EditorViewport, GridConfig, Tool } from "./types";
 import { useScoreEditor } from "./useScoreEditor";
+import { cleanTrackNotes, splitToTwoTracksByPitch } from "./cleanup";
+import type { CleanupStats } from "./cleanup";
+import { AssistPanel, type CleanupForm } from "./AssistPanel";
+import { toneClock } from "@/utils/toneClock";
+import { useToneClockState } from "@/hooks/useToneClock";
+
+type ScoreSnapshot = {
+  tracks: Array<Array<{ pitch: number; time: number; duration: number; velocity: number }>>;
+  focusTrackIndex: number;
+};
 
 const DEFAULT_VIEWPORT: EditorViewport = {
   pxPerSec: 120,
@@ -72,6 +84,59 @@ function EditorBody({
   const mixer = useMixerOptional();
   const entry = scores[editingStem];
   const bpm = entry.meta.bpm || 120;
+  const playbackMode = useStore((s) => s.playbackMode);
+  const tone = useToneClockState();
+  const [editingTrackIndex, setEditingTrackIndex] = useState(0);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const globalPastRef = useRef<ScoreSnapshot[]>([]);
+  const globalFutureRef = useRef<ScoreSnapshot[]>([]);
+  const [globalHistoryTick, setGlobalHistoryTick] = useState(0);
+  const tracks = entry.score.tracks ?? [];
+  const safeTrackIndex = Math.max(0, Math.min(editingTrackIndex, Math.max(0, tracks.length - 1)));
+  const captureSnapshot = useCallback((focus: number): ScoreSnapshot => ({
+    tracks: tracks.map((t) => (t.notes ?? []).map((n) => ({
+      pitch: n.pitch,
+      time: n.time,
+      duration: n.duration,
+      velocity: n.velocity,
+    }))),
+    focusTrackIndex: focus,
+  }), [tracks]);
+
+  const applySnapshot = useCallback((snap: ScoreSnapshot, opts?: { pushFutureFrom?: ScoreSnapshot }) => {
+    snap.tracks.forEach((notes, idx) => {
+      updateScoreNotes(editingStem, notes, idx);
+    });
+    if (opts?.pushFutureFrom) {
+      globalFutureRef.current.push(opts.pushFutureFrom);
+    }
+    const nextFocus = Math.max(0, Math.min(snap.focusTrackIndex, Math.max(0, snap.tracks.length - 1)));
+    setEditingTrackIndex(nextFocus);
+    // 当前编辑器状态由 initial/resetKey 驱动自动重置，无需在此直接改本地 api。
+    setGlobalHistoryTick((v) => v + 1);
+  }, [updateScoreNotes, editingStem]);
+  const [cleanupForm, setCleanupForm] = useState<CleanupForm>({
+    bpm,
+    minDivision: 32,
+    pitchMin: 40,
+    pitchMax: 90,
+    dedupeWindowSec: 0.04,
+    mergeGapSec: 0.03,
+  });
+
+  useEffect(() => {
+    setCleanupForm((prev) => ({ ...prev, bpm }));
+  }, [bpm]);
+
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsFullscreen(false);
+    };
+    window.addEventListener("keydown", onEsc);
+    return () => window.removeEventListener("keydown", onEsc);
+  }, [isFullscreen]);
 
   // 视口（缩放） + 工具 + 网格
   const [viewport, setViewport] = useState<EditorViewport>(DEFAULT_VIEWPORT);
@@ -79,12 +144,142 @@ function EditorBody({
   const [grid, setGrid] = useState<GridConfig>({ division: 16, snap: true });
 
   // ── 编辑器状态机 ─────────────────────────────────────────
-  const initialNotes = useMemo(() => fromScoreNotes(entry.score.tracks[0]?.notes ?? []), [entry]);
+  const initialNotes = useMemo(() => fromScoreNotes(entry.score.tracks[safeTrackIndex]?.notes ?? []), [entry, safeTrackIndex]);
   const writeBack = useCallback(
-    (notes: Parameters<typeof updateScoreNotes>[1]) => updateScoreNotes(editingStem, notes),
-    [editingStem, updateScoreNotes],
+    (notes: Parameters<typeof updateScoreNotes>[1]) => updateScoreNotes(editingStem, notes, safeTrackIndex),
+    [editingStem, safeTrackIndex, updateScoreNotes],
   );
-  const api = useScoreEditor(initialNotes, writeBack);
+  const api = useScoreEditor(initialNotes, writeBack, `${editingStem}:${safeTrackIndex}`);
+
+  const cleanupCurrentTrack = useCallback((): CleanupStats | null => {
+    const cleaned = cleanTrackNotes(api.notes, cleanupForm);
+    api.applyOperation({ type: "replace_all", notes: cleaned.notes });
+    return cleaned.stats;
+  }, [api, cleanupForm]);
+
+  const cleanupAllTracks = useCallback(() => {
+    const before = captureSnapshot(safeTrackIndex);
+    const cleanedByTrack = tracks.map((t) => {
+      const cleaned = cleanTrackNotes(fromScoreNotes(t.notes ?? []), cleanupForm);
+      return cleaned;
+    });
+    const nextTracks = cleanedByTrack.map(({ notes }) => notes.map((n) => ({
+        pitch: n.pitch,
+        time: n.time,
+        duration: n.duration,
+        velocity: n.velocity,
+      })));
+    const after: ScoreSnapshot = { tracks: nextTracks, focusTrackIndex: safeTrackIndex };
+    globalPastRef.current.push(before);
+    globalFutureRef.current = [];
+    applySnapshot(after);
+    return cleanedByTrack.map((c) => c.stats);
+  }, [tracks, cleanupForm, safeTrackIndex, captureSnapshot, applySnapshot]);
+
+  const reduceToTwoTracks = useCallback(() => {
+    const before = captureSnapshot(safeTrackIndex);
+    const merged = tracks.flatMap((t) => fromScoreNotes(t.notes ?? []));
+    const [high, low] = splitToTwoTracksByPitch(merged);
+    if (!high.length || !low.length) return;
+
+    const toScore = (notes: ReturnType<typeof fromScoreNotes>) =>
+      notes.map((n) => ({
+        pitch: n.pitch,
+        time: n.time,
+        duration: n.duration,
+        velocity: n.velocity,
+      }));
+
+    const collapsed = tracks.map((_t, i) => {
+      if (i === 0) return toScore(high);
+      if (i === 1) return toScore(low);
+      return [] as ReturnType<typeof toScore>;
+    });
+    const after: ScoreSnapshot = {
+      tracks: collapsed,
+      focusTrackIndex: Math.min(safeTrackIndex, 1),
+    };
+    globalPastRef.current.push(before);
+    globalFutureRef.current = [];
+    applySnapshot(after);
+  }, [tracks, safeTrackIndex, captureSnapshot, applySnapshot]);
+
+  const transposeTrack = useCallback((semitones: number) => {
+    if (!Number.isFinite(semitones) || semitones === 0) return;
+    api.applyOperation({
+      type: "replace_all",
+      notes: api.notes.map((n) => ({
+        ...n,
+        pitch: Math.max(0, Math.min(127, n.pitch + Math.round(semitones))),
+      })),
+    });
+  }, [api]);
+
+  const stretchTrack = useCallback((factor: number, selectionOnly: boolean) => {
+    if (!Number.isFinite(factor) || factor <= 0) return;
+    const safeFactor = Math.max(0.25, Math.min(4, factor));
+    const selection = api.selection;
+    const target = selectionOnly && selection.size > 0 ? api.notes.filter((n) => selection.has(n.id)) : api.notes;
+    if (!target.length) return;
+    const anchor = Math.min(...target.map((n) => n.time));
+    api.applyOperation({
+      type: "replace_all",
+      notes: api.notes.map((n) => {
+        if (selectionOnly && selection.size > 0 && !selection.has(n.id)) return n;
+        return {
+          ...n,
+          time: Math.max(0, anchor + (n.time - anchor) * safeFactor),
+          duration: Math.max(0.01, n.duration * safeFactor),
+        };
+      }),
+    });
+  }, [api]);
+
+  const playhead = playbackMode === "midi" ? tone.time : (mixer?.time ?? 0);
+
+  const undo = useCallback(() => {
+    const lastGlobal = globalPastRef.current.pop();
+    if (lastGlobal) {
+      const current = captureSnapshot(safeTrackIndex);
+      globalFutureRef.current.push(current);
+      applySnapshot(lastGlobal);
+      return;
+    }
+    api.undo();
+  }, [api, captureSnapshot, safeTrackIndex, applySnapshot]);
+
+  const redo = useCallback(() => {
+    const nextGlobal = globalFutureRef.current.pop();
+    if (nextGlobal) {
+      const current = captureSnapshot(safeTrackIndex);
+      globalPastRef.current.push(current);
+      applySnapshot(nextGlobal);
+      return;
+    }
+    api.redo();
+  }, [api, captureSnapshot, safeTrackIndex, applySnapshot]);
+
+  const canUndo = globalPastRef.current.length > 0 || api.canUndo;
+  const canRedo = globalFutureRef.current.length > 0 || api.canRedo;
+  void globalHistoryTick;
+
+  const seekPlayback = useCallback((seconds: number) => {
+    const t = Math.max(0, seconds);
+    if (playbackMode === "midi") {
+      toneClock.seek(t);
+    } else {
+      mixer?.seek(t);
+    }
+  }, [playbackMode, mixer]);
+
+  const playFrom = useCallback((seconds: number) => {
+    const t = Math.max(0, seconds);
+    if (playbackMode === "midi") {
+      void toneClock.play(t);
+    } else {
+      void mixer?.play(t);
+    }
+  }, [playbackMode, mixer]);
 
   // ── 试听音色：取所属 stem 的偏好；编辑器场景统一回退 piano ───
   const audition = useCallback((pitch: number, velocity = 90, duration = 0.35) => {
@@ -104,7 +299,6 @@ function EditorBody({
   );
   const scrollRef = useRef<HTMLDivElement>(null);
   // 自动滚动到播放头边缘
-  const playhead = mixer?.time ?? 0;
   useScrollFollow(scrollRef, playhead * viewport.pxPerSec);
 
   // 工具栏数据
@@ -114,15 +308,17 @@ function EditorBody({
   });
 
   return (
-    <div className="h-full flex flex-col bg-slate-950/40">
-      {mixer && <Transport bpm={bpm} />}
+    <div className={[
+      isFullscreen ? "fixed inset-0 z-[80] h-full flex flex-col bg-slate-950" : "h-full flex flex-col bg-slate-950/40",
+    ].join(" ")}>
+      {playbackMode === "midi" ? <ToneTransport bpm={bpm} /> : (mixer && <Transport bpm={bpm} />)}
       <EditorToolbar
         tool={tool} onToolChange={setTool}
         grid={grid} onGridChange={setGrid}
         pxPerSec={viewport.pxPerSec} rowH={viewport.rowH}
         onZoomH={onZoomH} onZoomV={onZoomV}
-        canUndo={api.canUndo} canRedo={api.canRedo}
-        onUndo={api.undo} onRedo={api.redo}
+        canUndo={canUndo} canRedo={canRedo}
+        onUndo={undo} onRedo={redo}
         selectionCount={api.selection.size}
         onDeleteSelected={() => { api.pushHistory(); api.deleteIds(api.selection); }}
         onAuditionSelected={() => {
@@ -132,6 +328,26 @@ function EditorBody({
         stems={stemItems}
         editingStem={editingStem}
         onEditingStemChange={onEditingStemChange}
+        tracks={tracks.map((t, i) => ({ index: i, label: `${i + 1}. ${t.name || t.id}` }))}
+        editingTrackIndex={safeTrackIndex}
+        onEditingTrackIndexChange={setEditingTrackIndex}
+        onOpenAssistPanel={() => setPanelOpen((v) => !v)}
+        isFullscreen={isFullscreen}
+        onToggleFullscreen={() => setIsFullscreen((v) => !v)}
+      />
+      <AssistPanel
+        open={panelOpen}
+        onClose={() => setPanelOpen(false)}
+        cleanup={cleanupForm}
+        onCleanupChange={setCleanupForm}
+        onApplyCleanupCurrent={cleanupCurrentTrack}
+        onApplyCleanupAllTracks={cleanupAllTracks}
+        onReduceToTwoTracks={reduceToTwoTracks}
+        onTransposeTrack={transposeTrack}
+        onStretchTrack={stretchTrack}
+        onSeek={seekPlayback}
+        onPlayFrom={playFrom}
+        currentPlayheadSec={playhead}
       />
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto relative">
         <div className="flex" style={{ minWidth: "100%" }}>
@@ -146,6 +362,7 @@ function EditorBody({
               duration={duration}
               playheadTime={mixer ? playhead : undefined}
               onAuditionNote={audition}
+              onBlankSeek={seekPlayback}
             />
             <VelocityLane api={api} viewport={viewport} duration={duration} />
           </div>

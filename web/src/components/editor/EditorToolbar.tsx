@@ -3,7 +3,8 @@
  */
 import {
   MousePointer2, Pencil, Eraser, Undo2, Redo2,
-  ZoomIn, ZoomOut, Magnet, Trash2, Volume2,
+  ZoomIn, ZoomOut, Magnet, Trash2, Volume2, Settings2,
+  Maximize2, Minimize2,
 } from "lucide-react";
 import type { GridConfig, Tool } from "./types";
 
@@ -27,6 +28,12 @@ export interface ToolbarProps {
   stems: { id: string; label: string; icon: string }[];
   editingStem: string;
   onEditingStemChange: (stem: string) => void;
+  tracks: { index: number; label: string }[];
+  editingTrackIndex: number;
+  onEditingTrackIndexChange: (index: number) => void;
+  onOpenAssistPanel: () => void;
+  isFullscreen: boolean;
+  onToggleFullscreen: () => void;
 }
 
 export function EditorToolbar(p: ToolbarProps) {
@@ -42,6 +49,20 @@ export function EditorToolbar(p: ToolbarProps) {
           >
             {p.stems.map((s) => (
               <option key={s.id} value={s.id}>{s.icon} {s.label}</option>
+            ))}
+          </select>
+        </Group>
+      )}
+
+      {p.tracks.length > 1 && (
+        <Group label="轨道">
+          <select
+            value={p.editingTrackIndex}
+            onChange={(e) => p.onEditingTrackIndexChange(Number(e.target.value))}
+            className="bg-slate-900 border border-slate-700 rounded px-1.5 py-1 text-xs text-slate-200"
+          >
+            {p.tracks.map((t) => (
+              <option key={t.index} value={t.index}>{t.label}</option>
             ))}
           </select>
         </Group>
@@ -91,6 +112,24 @@ export function EditorToolbar(p: ToolbarProps) {
       <Group label={`选区 ${p.selectionCount || ""}`}>
         <ToolBtn disabled={!p.selectionCount} onClick={p.onAuditionSelected} title="试听选中音符"><Volume2 className="w-3.5 h-3.5" /></ToolBtn>
         <ToolBtn disabled={!p.selectionCount} onClick={p.onDeleteSelected} title="删除选中 (Del)"><Trash2 className="w-3.5 h-3.5" /></ToolBtn>
+      </Group>
+
+      <Group label="专业">
+        <button
+          onClick={p.onOpenAssistPanel}
+          className="px-2 py-1 rounded text-xs text-slate-200 hover:bg-slate-800 inline-flex items-center gap-1"
+          title="打开精简/音区/拉伸/播放定位设置"
+        >
+          <Settings2 className="w-3.5 h-3.5" /> 设置
+        </button>
+        <button
+          onClick={p.onToggleFullscreen}
+          className="px-2 py-1 rounded text-xs text-slate-200 hover:bg-slate-800 inline-flex items-center gap-1"
+          title={p.isFullscreen ? "退出全屏编辑" : "全屏编辑"}
+        >
+          {p.isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+          {p.isFullscreen ? "退出" : "全屏"}
+        </button>
       </Group>
     </div>
   );

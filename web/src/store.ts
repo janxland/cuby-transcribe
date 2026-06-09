@@ -63,8 +63,12 @@ interface Store {
   setCurrentTime: (t: number) => void;
   /** 点击一条 stem：在 activeStems 里加入或移出；新加入的置于 front 成为主显 */
   toggleActiveStem: (stem: string) => void;
-  /** 编辑器写回：用新的 notes 列表替换某 stem 的 score.tracks[0].notes（保留其它字段） */
-  updateScoreNotes: (stem: string, notes: CubyScore["tracks"][number]["notes"]) => void;
+  /** 编辑器写回：替换某 stem 的指定轨道 notes（默认第 0 轨） */
+  updateScoreNotes: (
+    stem: string,
+    notes: CubyScore["tracks"][number]["notes"],
+    trackIndex?: number,
+  ) => void;
   startUpload: () => Promise<void>;
   retranscribeWith: (stem: string) => Promise<void>;
   cancelCurrentTask: () => Promise<void>;
@@ -223,15 +227,30 @@ export const useStore = create<Store>((set, get) => ({
     set({ activeStems: next });
   },
 
-  updateScoreNotes: (stem, notes) => {
+  updateScoreNotes: (stem, notes, trackIndex = 0) => {
     const { scores } = get();
     const entry = scores[stem];
     if (!entry) return;
-    const tracks = entry.score.tracks;
-    const head = tracks[0] ?? { id: "track_1", name: "Melody", instrument: "sky_15", notes: [] };
+    const tracks = [...entry.score.tracks];
+    const fallbackTrack = {
+      id: `track_${trackIndex + 1}`,
+      name: `Track ${trackIndex + 1}`,
+      instrument: "Grand Piano",
+      notes: [],
+    };
+    const target = tracks[trackIndex] ?? fallbackTrack;
+    while (tracks.length <= trackIndex) {
+      const i = tracks.length;
+      tracks.push({
+        id: `track_${i + 1}`,
+        name: `Track ${i + 1}`,
+        instrument: "Grand Piano",
+        notes: [],
+      });
+    }
     const nextScore: CubyScore = {
       ...entry.score,
-      tracks: [{ ...head, notes }, ...tracks.slice(1)],
+      tracks: tracks.map((t, i) => (i === trackIndex ? { ...target, notes } : t)),
     };
     set({ scores: { ...scores, [stem]: { score: nextScore, meta: entry.meta } } });
   },

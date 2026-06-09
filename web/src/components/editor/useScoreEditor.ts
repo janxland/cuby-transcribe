@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { EditorNote } from "./types";
 import { toScoreNotes } from "./types";
 import type { Note as ScoreNote } from "@/types";
+import type { EditorOperation } from "./ordt";
 
 const HISTORY_LIMIT = 100;
 
@@ -31,6 +32,7 @@ export interface ScoreEditorApi {
   addNote: (n: Omit<EditorNote, "id">) => string;
   deleteIds: (ids: Iterable<string>) => void;
   patchIds: (ids: Iterable<string>, fn: (n: EditorNote) => EditorNote) => void;
+  applyOperation: (op: EditorOperation, opts?: { recordHistory?: boolean }) => void;
 
   // 历史
   undo: () => void;
@@ -45,12 +47,22 @@ const newId = () => `n${Date.now().toString(36)}${(_seq++).toString(36)}`;
 export function useScoreEditor(
   initial: EditorNote[],
   onChange: (notes: ScoreNote[]) => void,
+  resetKey?: string,
 ): ScoreEditorApi {
   const [present, setPresent] = useState<EditorNote[]>(() => initial);
   const [selection, setSelection] = useState<Set<string>>(() => new Set());
   const pastRef = useRef<EditorNote[][]>([]);
   const futureRef = useRef<EditorNote[][]>([]);
   const [historyTick, setHistoryTick] = useState(0); // 仅为触发 canUndo/canRedo 重算
+
+  useEffect(() => {
+    setPresent(initial);
+    setSelection(new Set());
+    pastRef.current = [];
+    futureRef.current = [];
+    firstRef.current = true;
+    setHistoryTick((t) => t + 1);
+  }, [initial, resetKey]);
 
   // ── 写回外层（不在 mount 时触发，避免与初始 score 冗余）─────────
   const firstRef = useRef(true);
@@ -134,6 +146,35 @@ export function useScoreEditor(
     setPresent((p) => p.map((n) => (set.has(n.id) ? fn(n) : n)));
   }, []);
 
+  const applyOperation: ScoreEditorApi["applyOperation"] = useCallback((op, opts) => {
+    if (opts?.recordHistory !== false) pushHistory();
+    if (op.type === "replace_all") {
+      setPresent(op.notes);
+      setSelection(new Set());
+      return;
+    }
+    if (op.type === "delete_ids") {
+      const set = new Set(op.ids);
+      setPresent((p) => p.filter((n) => !set.has(n.id)));
+      setSelection((cur) => {
+        const next = new Set(cur);
+        for (const id of set) next.delete(id);
+        return next;
+      });
+      return;
+    }
+    if (op.type === "patch_ids") {
+      const set = new Set(op.ids);
+      setPresent((p) => p.map((n) => (set.has(n.id) ? op.patch(n) : n)));
+      return;
+    }
+    if (op.type === "add_note") {
+      const id = op.id ?? newId();
+      setPresent((p) => [...p, { ...op.note, id }]);
+      setSelection(new Set([id]));
+    }
+  }, [pushHistory]);
+
   // historyTick used only for memo invalidation
   void historyTick;
 
@@ -142,6 +183,7 @@ export function useScoreEditor(
     selection,
     select, clearSelection, selectAll,
     pushHistory, addNote, deleteIds, patchIds,
+    applyOperation,
     undo, redo,
     canUndo: pastRef.current.length > 0,
     canRedo: futureRef.current.length > 0,
