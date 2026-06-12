@@ -1,28 +1,26 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Loader2, CheckCircle2, XCircle, Download } from "lucide-react";
 import { useStore } from "@/store";
 import { usePrimaryMeta, usePrimaryScore } from "@/selectors";
-import { downloadMidi, buildMidi } from "@/utils/midiExporter";
+import { stemMeta } from "@/stems";
+import { downloadMidi } from "@/utils/midiExporter";
 import type { CubyScore } from "@/types";
 
 function downloadTrackMidi(score: CubyScore, trackIdx: number) {
   const track = score.tracks[trackIdx];
   if (!track) return;
-  const single: CubyScore = { ...score, tracks: [track] };
-  const data = buildMidi(single, "multi");
-  const ab = new ArrayBuffer(data.byteLength);
-  new Uint8Array(ab).set(data);
-  const blob = new Blob([ab], { type: "audio/midi" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
   const safeName = (score.meta.title || "cuby").replace(/[^\w.\-]+/g, "_");
-  const safeTk = track.name.replace(/[^\w.\-]+/g, "_");
-  a.download = `${safeName}_${safeTk}.mid`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  const safeTk = (track.name || track.id || `track_${trackIdx + 1}`).replace(/[^\w.\-]+/g, "_");
+  downloadMidi(score, `${safeName}_${safeTk}.mid`, "multi", { trackIndices: [trackIdx] });
+}
+
+function trackDisplayName(stem: string, trackName: string, trackCount: number): string {
+  const source = stemMeta(stem).label;
+  const cleanTrack = (trackName || "Track").trim();
+  if (!stem || stem === "midi") return cleanTrack;
+  if (trackCount <= 1 && cleanTrack.toLowerCase() === stem.toLowerCase()) return source;
+  if (cleanTrack.includes(source) || cleanTrack.includes(stem)) return cleanTrack;
+  return `${source} · ${cleanTrack}`;
 }
 
 export function ProgressCard() {
@@ -32,19 +30,24 @@ export function ProgressCard() {
   const score = usePrimaryScore();
   const scores = useStore((s) => s.scores);
   const taskResult = task?.result;
+  const [selectedTrackIndices, setSelectedTrackIndices] = useState<number[]>([]);
 
   const exportScore = useMemo<CubyScore | null>(() => {
-    const entries = Object.values(scores);
+    const entries = Object.entries(scores);
     if (entries.length > 0) {
-      const base = entries[0]?.score ?? taskResult ?? score;
+      const base = entries[0]?.[1].score ?? taskResult ?? score;
       if (!base) return null;
-      const tracks = entries.flatMap((entry, idx) => {
-        const head = entry.score.tracks[0];
-        if (!head || !head.notes?.length) return [];
-        return [{
-          ...head,
-          id: `export_${idx}_${head.id || "track"}`,
-        }];
+      const tracks = entries.flatMap(([stem, entry], entryIdx) => {
+        const sourceTracks = entry.score.tracks ?? [];
+        return sourceTracks.flatMap((track, trackIdx) => {
+          if (!track || !track.notes?.length) return [];
+          const name = trackDisplayName(stem, track.name || track.id, sourceTracks.length);
+          return [{
+            ...track,
+            id: `export_${entryIdx}_${trackIdx}_${track.id || "track"}`,
+            name,
+          }];
+        });
       });
       if (tracks.length > 0) {
         return {
@@ -55,6 +58,36 @@ export function ProgressCard() {
     }
     return taskResult ?? score;
   }, [scores, taskResult, score]);
+
+  const exportTrackKey = useMemo(
+    () => exportScore?.tracks.map((track, idx) => `${idx}:${track.id}:${track.notes.length}`).join("|") ?? "",
+    [exportScore],
+  );
+  const allTrackIndices = useMemo(
+    () => exportScore?.tracks.map((_track, idx) => idx) ?? [],
+    [exportTrackKey, exportScore],
+  );
+  const selectedSet = useMemo(() => new Set(selectedTrackIndices), [selectedTrackIndices]);
+  const selectedCount = selectedTrackIndices.filter((idx) => Boolean(exportScore?.tracks[idx])).length;
+
+  useEffect(() => {
+    setSelectedTrackIndices(allTrackIndices);
+  }, [allTrackIndices]);
+
+  const toggleTrack = (trackIdx: number) => {
+    setSelectedTrackIndices((prev) => {
+      const next = new Set(prev);
+      if (next.has(trackIdx)) next.delete(trackIdx);
+      else next.add(trackIdx);
+      return allTrackIndices.filter((idx) => next.has(idx));
+    });
+  };
+
+  const selectedFilename = (mode: "multi" | "single") => {
+    const safeName = (exportScore?.meta.title || "cuby").replace(/[^\w.\-]+/g, "_");
+    const suffix = mode === "single" ? "selected_single" : "selected_tracks";
+    return `${safeName}_${suffix}.mid`;
+  };
 
   if (!task) return null;
 
@@ -119,29 +152,64 @@ export function ProgressCard() {
               {/* 全局导出 */}
               <div className="flex gap-2">
                 <button
-                  onClick={() => downloadMidi(exportScore, undefined, "multi")}
+                  disabled={selectedCount === 0}
+                  onClick={() => downloadMidi(
+                    exportScore,
+                    selectedFilename("multi"),
+                    "multi",
+                    { trackIndices: selectedTrackIndices },
+                  )}
                   className="flex-1 py-2 rounded-lg bg-emerald-600/90 hover:bg-emerald-500 text-white text-sm font-medium flex items-center justify-center gap-2 transition"
                 >
                   <Download className="w-4 h-4" />
-                  导出 MIDI（多轨保真）
+                  导出选中 MIDI（{selectedCount} 轨）
                 </button>
                 <button
-                  onClick={() => downloadMidi(exportScore, undefined, "single")}
-                  title="所有轨合并为单轨 MIDI"
+                  disabled={selectedCount === 0}
+                  onClick={() => downloadMidi(
+                    exportScore,
+                    selectedFilename("single"),
+                    "single",
+                    { trackIndices: selectedTrackIndices },
+                  )}
+                  title="选中轨道合并为单轨 MIDI"
                   className="px-3 py-2 rounded-lg border border-slate-700 hover:border-slate-500 text-slate-300 text-xs flex items-center gap-1.5 transition"
                 >
                   <Download className="w-3.5 h-3.5" />
-                  单轨
+                  合并单轨
                 </button>
               </div>
               {/* 逐轨下载（多轨时展示） */}
               {exportScore.tracks.length > 1 && (
                 <div className="rounded-lg border border-slate-800 bg-slate-950/60 divide-y divide-slate-800/60">
+                  <div className="flex items-center gap-2 px-3 py-2">
+                    <span className="text-[10px] uppercase tracking-wider text-slate-500">下载轨道</span>
+                    <button
+                      onClick={() => setSelectedTrackIndices(allTrackIndices)}
+                      className="ml-auto px-2 py-1 rounded border border-slate-700 hover:border-emerald-500 text-slate-300 text-xs transition"
+                    >
+                      全选
+                    </button>
+                    <button
+                      onClick={() => setSelectedTrackIndices([])}
+                      className="px-2 py-1 rounded border border-slate-700 hover:border-slate-500 text-slate-300 text-xs transition"
+                    >
+                      清空
+                    </button>
+                  </div>
                   {exportScore.tracks.map((track, idx) => (
                     <div key={track.id} className="flex items-center justify-between px-3 py-1.5 gap-2">
-                      <span className="text-xs text-slate-300 truncate flex-1">
-                        {track.instrument || track.name}
-                      </span>
+                      <label className="min-w-0 flex-1 flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={selectedSet.has(idx)}
+                          onChange={() => toggleTrack(idx)}
+                          className="h-3.5 w-3.5 accent-emerald-500 shrink-0"
+                        />
+                        <span className="text-xs text-slate-300 truncate">
+                          {track.name || track.instrument || track.id}
+                        </span>
+                      </label>
                       <span className="text-[10px] text-slate-500 shrink-0">
                         {track.notes.length} 音符
                       </span>

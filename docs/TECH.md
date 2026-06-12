@@ -200,6 +200,7 @@ SKY_KEYS = [60, 62, 64, 65, 67, 69, 71, 72, 74, 76, 77, 79, 81, 83, 84]
 | POST | `/api/transcribe` | multipart：`file` + `options` (JSON) |
 | GET | `/api/transcribe/:taskId` | 状态 + 结果 + stems[] |
 | POST | `/api/transcribe/:taskId/retranscribe` | body `{stem}` → 用已分离 stem 重扒 |
+| POST | `/api/score/cleanup` | body `{score, options}` → Python 外部 AI MIDI 后处理 |
 | GET | `/api/stems/:agentId/:name` | 代理 stem 文件下载 / `<audio>` 播放 |
 
 请求 `options`（[types.ts](../web/src/types.ts)）：
@@ -255,9 +256,57 @@ SKY_KEYS = [60, 62, 64, 65, 67, 69, 71, 72, 74, 76, 77, 79, 81, 83, 84]
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | `/internal/process` | body `{audioPath, options, taskId}` |
+| POST | `/internal/score/cleanup` | body `{score, options}`；调用 AnthemScore / MIDI Cleaner AI |
 | GET | `/internal/stems/:taskId/:name` | 返回 wav（含路径穿越防护） |
 
-### 5.3 CubyScore JSON Schema（[v1.1](../python-agent/app/models.py)）
+### 5.3 AI MIDI 后处理配置
+
+前端“AI保旋律降噪”不在浏览器里用硬规则冒充 AI。默认走 Python 后端内置 `local_ai`：
+先用 1/32 碎音预清理减少毛刺，再用当前曲子的音符分布自适应学习旋律线、左右手音区和异常概率。
+AnthemScore / MIDI Cleaner AI 作为可选本机工具或私有 provider 接入。
+
+```mermaid
+sequenceDiagram
+  participant W as Web Editor
+  participant N as Node
+  participant P as Python
+  participant A as Local/Private AI MIDI Cleaner
+
+  W->>N: POST /api/score/cleanup {score, options}
+  N->>P: POST /internal/score/cleanup
+  P->>P: 可选 1/32 碎音预清理
+  P->>A: local_ai / AnthemScore CLI / MIDI Cleaner AI HTTP
+  A-->>P: cleaned MIDI / CubyScore
+  P-->>N: {cubyScore, stats}
+  N-->>W: {cubyScore, stats}
+```
+
+可用环境变量：
+
+| 变量 | 用途 |
+|---|---|
+| `MIDI_CLEANER_AI_URL` | 可选 HTTP provider 地址；Python 会 POST `{score, options, instruction}` |
+| `MIDI_CLEANER_AI_API_KEY` | 可选 Bearer token |
+| `MIDI_CLEANER_AI_TIMEOUT_SEC` | 可选，默认 180 秒 |
+| `ANTHEMSCORE_CLI_TEMPLATE` | 可选 AnthemScore 命令模板，支持 `{input}` 和 `{output}` 占位 |
+| `ANTHEMSCORE_CLI` | 可选简化命令：按 `[binary, input.mid, output.mid]` 调用 |
+| `ANTHEMSCORE_TIMEOUT_SEC` | 可选，默认 300 秒 |
+
+`options.provider` 支持：
+
+```jsonc
+{
+  "provider": "auto",                 // auto | local_ai | anthem_score | midi_cleaner_ai
+  "removeOneThirtySecondNoise": true,  // Python 仅做这一层轻量预清理
+  "minDivision": 32,
+  "targetBpm": 86,
+  "preserveMelody": true
+}
+```
+
+当没有配置外部 provider 时，`auto` 会使用 Python 内置 `local_ai`，不会退回前端固定阈值算法。
+
+### 5.4 CubyScore JSON Schema（[v1.1](../python-agent/app/models.py)）
 
 ```jsonc
 {

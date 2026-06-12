@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { Sparkles } from "lucide-react";
+import type { ScoreCleanupProvider, ScoreCleanupStats } from "@/types";
 import type { CleanupOptions, CleanupStats } from "./cleanup";
 
 export interface CleanupForm extends Required<Omit<CleanupOptions, "bpm">> {
@@ -12,6 +14,7 @@ interface Props {
   onCleanupChange: (next: CleanupForm) => void;
   onApplyCleanupCurrent: () => CleanupStats | null;
   onApplyCleanupAllTracks: () => CleanupStats[];
+  onApplyAiCleanup: (provider: ScoreCleanupProvider) => Promise<ScoreCleanupStats>;
   onReduceToTwoTracks: () => void;
   onTransposeTrack: (semitones: number) => void;
   onStretchTrack: (factor: number, selectionOnly: boolean) => void;
@@ -28,6 +31,7 @@ export function AssistPanel(props: Props) {
     onCleanupChange,
     onApplyCleanupCurrent,
     onApplyCleanupAllTracks,
+    onApplyAiCleanup,
     onReduceToTwoTracks,
     onTransposeTrack,
     onStretchTrack,
@@ -40,6 +44,8 @@ export function AssistPanel(props: Props) {
   const [stretchInput, setStretchInput] = useState("1.00");
   const [transposeInput, setTransposeInput] = useState("12");
   const [lastCleanupSummary, setLastCleanupSummary] = useState("");
+  const [aiProvider, setAiProvider] = useState<ScoreCleanupProvider>("auto");
+  const [aiBusy, setAiBusy] = useState(false);
 
   const cleanupHint = useMemo(() => {
     const minDurSec = (60 / Math.max(30, cleanup.bpm || 120)) * (4 / cleanup.minDivision);
@@ -56,7 +62,47 @@ export function AssistPanel(props: Props) {
       </div>
 
       <section className="rounded-lg border border-slate-800 bg-slate-950/40 p-3 space-y-2">
-        <div className="text-xs text-slate-300 font-medium">1) 可定制精简（点击后不自动执行）</div>
+        <div className="text-xs text-slate-300 font-medium">1) Python AI 后处理</div>
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <select
+            value={aiProvider}
+            onChange={(e) => setAiProvider(e.target.value as ScoreCleanupProvider)}
+            className="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-xs text-slate-200"
+            title="选择 Python 后端调用的 AI MIDI 清理 provider"
+          >
+            <option value="auto">自动选择（本地AI）</option>
+            <option value="local_ai">Python 本地AI</option>
+            <option value="anthem_score">AnthemScore</option>
+            <option value="midi_cleaner_ai">MIDI Cleaner AI</option>
+          </select>
+          <button
+            disabled={aiBusy}
+            onClick={async () => {
+              setAiBusy(true);
+              try {
+                const stats = await onApplyAiCleanup(aiProvider);
+                setLastCleanupSummary(formatAiSummary("AI后处理", stats));
+              } catch (e) {
+                setLastCleanupSummary(e instanceof Error ? e.message : String(e));
+              } finally {
+                setAiBusy(false);
+              }
+            }}
+            className={[
+              "px-3 py-1.5 rounded text-white inline-flex items-center gap-1.5",
+              aiBusy ? "bg-slate-700 cursor-wait" : "bg-indigo-600 hover:bg-indigo-500",
+            ].join(" ")}
+            title="提交到 Python，由本地 AI 或配置的 AnthemScore / MIDI Cleaner AI 做保旋律降噪"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            {aiBusy ? "处理中" : "AI保旋律降噪"}
+          </button>
+          <span className="text-[11px] text-slate-500">Python 先做 1/32 预清理，再用本地 AI 保旋律降噪</span>
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-800 bg-slate-950/40 p-3 space-y-2">
+        <div className="text-xs text-slate-300 font-medium">2) 可定制精简（点击后不自动执行）</div>
         <div className="grid grid-cols-5 gap-2 text-xs">
           <LabelInput label="BPM" value={String(cleanup.bpm)} onChange={(v) => onCleanupChange({ ...cleanup, bpm: clampNum(v, 30, 280, cleanup.bpm) })} />
           <div>
@@ -119,7 +165,7 @@ export function AssistPanel(props: Props) {
       </section>
 
       <section className="rounded-lg border border-slate-800 bg-slate-950/40 p-3 space-y-2">
-        <div className="text-xs text-slate-300 font-medium">2) 轨道音区提升</div>
+        <div className="text-xs text-slate-300 font-medium">3) 轨道音区提升</div>
         <div className="flex items-center gap-2 text-xs">
           <button onClick={() => onTransposeTrack(12)} className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700">+12 半音（升八度）</button>
           <button onClick={() => onTransposeTrack(-12)} className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700">-12 半音（降八度）</button>
@@ -138,7 +184,7 @@ export function AssistPanel(props: Props) {
       </section>
 
       <section className="rounded-lg border border-slate-800 bg-slate-950/40 p-3 space-y-2">
-        <div className="text-xs text-slate-300 font-medium">3) 曲谱时间拉伸（不改音高）</div>
+        <div className="text-xs text-slate-300 font-medium">4) 曲谱时间拉伸（不改音高）</div>
         <div className="flex items-center gap-2 text-xs">
           <input
             value={stretchInput}
@@ -162,7 +208,7 @@ export function AssistPanel(props: Props) {
       </section>
 
       <section className="rounded-lg border border-slate-800 bg-slate-950/40 p-3 space-y-2">
-        <div className="text-xs text-slate-300 font-medium">4) 设置播放位置</div>
+        <div className="text-xs text-slate-300 font-medium">5) 设置播放位置</div>
         <div className="flex items-center gap-2 text-xs">
           <span className="text-slate-500">当前</span>
           <span className="font-mono text-slate-200">{currentPlayheadSec.toFixed(2)}s</span>
@@ -217,4 +263,8 @@ function clampFloat(input: string, min: number, max: number, fallback: number): 
 
 function formatSummary(scope: string, stats: CleanupStats): string {
   return `${scope}: ${stats.before} -> ${stats.after}，短音-${stats.removedShort}，越界-${stats.removedOutOfRange}，去重-${stats.removedDuplicate}，合并+${stats.mergedPairs}`;
+}
+
+function formatAiSummary(scope: string, stats: ScoreCleanupStats): string {
+  return `${scope}: ${stats.before} -> ${stats.after}，1/32预清-${stats.removedOneThirtySecond}，provider=${stats.provider}`;
 }

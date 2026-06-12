@@ -326,7 +326,7 @@ export function Uploader() {
               <label className="flex items-center gap-2 text-xs text-slate-300">
                 <input
                   type="checkbox"
-                  checked={options.vocalToSky25 ?? true}
+                  checked={options.vocalToSky25 ?? false}
                   onChange={(e) => setOptions({ vocalToSky25: e.target.checked })}
                   className="accent-amber-400"
                 />

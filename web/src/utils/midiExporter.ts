@@ -10,6 +10,9 @@ import { Midi } from "@tonejs/midi";
 import type { CubyScore } from "@/types";
 
 export type MidiExportMode = "multi" | "single";
+export interface MidiBuildOptions {
+  trackIndices?: number[];
+}
 
 function inferProgramAndChannel(trackName: string, instrument: string): { program: number; channel?: number } {
   const s = `${trackName} ${instrument}`.toLowerCase();
@@ -29,7 +32,11 @@ function parseTimeSig(ts: string | undefined): [number, number] {
   return [Number(m[1]) || 4, Number(m[2]) || 4];
 }
 
-export function buildMidi(score: CubyScore, mode: MidiExportMode = "multi"): Uint8Array {
+export function buildMidi(
+  score: CubyScore,
+  mode: MidiExportMode = "multi",
+  options: MidiBuildOptions = {},
+): Uint8Array {
   const midi = new Midi();
   const bpm = score.meta.bpm || 120;
   const ppq = score.meta.ppq || 480;
@@ -41,13 +48,15 @@ export function buildMidi(score: CubyScore, mode: MidiExportMode = "multi"): Uin
     measures: 0,
   });
 
+  const selectedTracks = selectTracks(score, options.trackIndices);
+
   if (mode === "single") {
     const tk = midi.addTrack();
     tk.name = score.meta.title || "Cuby Transcribe";
     const { program, channel } = inferProgramAndChannel("", "Grand Piano");
     tk.instrument.number = program;
     if (channel != null) tk.channel = channel;
-    score.tracks
+    selectedTracks
       .flatMap((t) => t.notes)
       .sort((a, b) => a.time - b.time || a.pitch - b.pitch)
       .forEach((n) => {
@@ -60,7 +69,7 @@ export function buildMidi(score: CubyScore, mode: MidiExportMode = "multi"): Uin
         });
       });
   } else {
-    score.tracks.forEach((t) => {
+    selectedTracks.forEach((t) => {
       if (!t.notes.length) return;
       const tk = midi.addTrack();
       tk.name = t.name || t.id;
@@ -86,8 +95,20 @@ function clampMidi(p: number): number {
   return Math.max(0, Math.min(127, Math.round(p)));
 }
 
-export function downloadMidi(score: CubyScore, filename?: string, mode: MidiExportMode = "multi") {
-  const data = buildMidi(score, mode);
+function selectTracks(score: CubyScore, trackIndices?: number[]) {
+  if (!trackIndices) return score.tracks;
+  if (!trackIndices.length) return [];
+  const selected = new Set(trackIndices);
+  return score.tracks.filter((_track, index) => selected.has(index));
+}
+
+export function downloadMidi(
+  score: CubyScore,
+  filename?: string,
+  mode: MidiExportMode = "multi",
+  options: MidiBuildOptions = {},
+) {
+  const data = buildMidi(score, mode, options);
   // 显式拷贝到 ArrayBuffer 以避开 TS Uint8Array<ArrayBufferLike> vs BlobPart 的类型分歧
   const ab = new ArrayBuffer(data.byteLength);
   new Uint8Array(ab).set(data);

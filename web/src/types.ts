@@ -116,3 +116,21 @@ export interface UploadOptions {
   /** 手动 BPM；留空时自动检测并纠偏 */
   manualBpm?: number | null;
 }
+
+export type ScoreCleanupProvider = "auto" | "local_ai" | "anthem_score" | "midi_cleaner_ai";
+
+export interface ScoreCleanupOptions {
+  provider: ScoreCleanupProvider;
+  removeOneThirtySecondNoise: boolean;
+  minDivision: 32;
+  targetBpm?: number | null;
+  preserveMelody: boolean;
+}
+
+export interface ScoreCleanupStats {
+  before: number;
+  after: number;
+  removedOneThirtySecond: number;
+  provider: string;
+  message: string;
+}

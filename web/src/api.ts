@@ -1,7 +1,7 @@
 /**
  * 业务 API 端点：仅声明请求/响应形状，HTTP 细节集中在 lib/http.ts。
  */
-import type { TaskState, UploadOptions } from "@/types";
+import type { CubyScore, ScoreCleanupOptions, ScoreCleanupStats, TaskState, UploadOptions } from "@/types";
 import { request } from "@/lib/http";
 
 export async function uploadAudio(
@@ -39,5 +39,18 @@ export function cancelTranscribeTask(
   return request(`/api/transcribe/${taskId}/cancel`, {
     method: "POST",
     signal,
+  });
+}
+
+export function cleanupScoreWithAi(
+  score: CubyScore,
+  options: ScoreCleanupOptions,
+  signal?: AbortSignal,
+): Promise<{ success: boolean; cubyScore: CubyScore; stats: ScoreCleanupStats }> {
+  return request("/api/score/cleanup", {
+    method: "POST",
+    body: { score, options },
+    signal,
+    timeoutMs: 0,
   });
 }

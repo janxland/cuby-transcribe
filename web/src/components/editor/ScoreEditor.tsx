@@ -14,6 +14,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStoreShallow } from "@/selectors";
 import { stemMeta } from "@/stems";
 import { useStore } from "@/store";
+import { cleanupScoreWithAi } from "@/api";
+import { toAppError } from "@/lib/http";
 import { useMixerOptional } from "../mixer";
 import { Transport } from "../mixer/Transport";
 import { ToneTransport } from "../ToneTransport";
@@ -30,6 +32,7 @@ import type { CleanupStats } from "./cleanup";
 import { AssistPanel, type CleanupForm } from "./AssistPanel";
 import { toneClock } from "@/utils/toneClock";
 import { useToneClockState } from "@/hooks/useToneClock";
+import type { ScoreCleanupProvider } from "@/types";
 
 type ScoreSnapshot = {
   tracks: Array<Array<{ pitch: number; time: number; duration: number; velocity: number }>>;
@@ -80,7 +83,11 @@ function EditorBody({
   stems: string[];
   onEditingStemChange: (s: string) => void;
 }) {
-  const { scores, updateScoreNotes } = useStoreShallow((s) => ({ scores: s.scores, updateScoreNotes: s.updateScoreNotes }));
+  const { scores, updateScoreNotes, replaceScore } = useStoreShallow((s) => ({
+    scores: s.scores,
+    updateScoreNotes: s.updateScoreNotes,
+    replaceScore: s.replaceScore,
+  }));
   const mixer = useMixerOptional();
   const entry = scores[editingStem];
   const bpm = entry.meta.bpm || 120;
@@ -175,6 +182,31 @@ function EditorBody({
     applySnapshot(after);
     return cleanedByTrack.map((c) => c.stats);
   }, [tracks, cleanupForm, safeTrackIndex, captureSnapshot, applySnapshot]);
+
+  const applyAiCleanup = useCallback(async (provider: ScoreCleanupProvider) => {
+    try {
+      const before = captureSnapshot(safeTrackIndex);
+      const r = await cleanupScoreWithAi(entry.score, {
+        provider,
+        removeOneThirtySecondNoise: true,
+        minDivision: 32,
+        targetBpm: cleanupForm.bpm,
+        preserveMelody: true,
+      });
+      globalPastRef.current.push(before);
+      globalFutureRef.current = [];
+      replaceScore(editingStem, r.cubyScore, {
+        bpm: r.cubyScore.meta.bpm,
+        noteCount: r.stats.after,
+        tempoSource: "user",
+      });
+      setGlobalHistoryTick((v) => v + 1);
+      return r.stats;
+    } catch (e) {
+      const err = toAppError(e);
+      throw new Error(err.message);
+    }
+  }, [captureSnapshot, cleanupForm.bpm, editingStem, entry.score, replaceScore, safeTrackIndex]);
 
   const reduceToTwoTracks = useCallback(() => {
     const before = captureSnapshot(safeTrackIndex);
@@ -342,6 +374,7 @@ function EditorBody({
         onCleanupChange={setCleanupForm}
         onApplyCleanupCurrent={cleanupCurrentTrack}
         onApplyCleanupAllTracks={cleanupAllTracks}
+        onApplyAiCleanup={applyAiCleanup}
         onReduceToTwoTracks={reduceToTwoTracks}
         onTransposeTrack={transposeTrack}
         onStretchTrack={stretchTrack}

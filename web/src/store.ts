@@ -69,6 +69,14 @@ interface Store {
     notes: CubyScore["tracks"][number]["notes"],
     trackIndex?: number,
   ) => void;
+  /** 编辑器写回：更新谱面元数据（如 BPM/调号），并同步 Metadata 中的同名字段 */
+  updateScoreMeta: (
+    stem: string,
+    scoreMeta: Partial<CubyScore["meta"]>,
+    meta?: Partial<Metadata>,
+  ) => void;
+  /** 编辑器/后处理写回：替换某 stem 的整份 score */
+  replaceScore: (stem: string, score: CubyScore, meta?: Partial<Metadata>) => void;
   startUpload: () => Promise<void>;
   retranscribeWith: (stem: string) => Promise<void>;
   cancelCurrentTask: () => Promise<void>;
@@ -78,7 +86,7 @@ interface Store {
 }
 
 const DEFAULT_OPTIONS: UploadOptions = {
-  // 默认 100% 保真 + 流行音乐最常用的「人声/伴奏 双轨」预设
+  // 默认第一阶段：原始高保真扒谱，只做人声/伴奏分离与音符提取，不做演奏场景适配
   fidelityMode: "raw",
   separationQuality: "high",
   transposeToC: false,
@@ -87,7 +95,7 @@ const DEFAULT_OPTIONS: UploadOptions = {
   separationMode: "vocals",
   stems: ["vocals", "no_vocals"],
   transcribeStem: "vocals",
-  vocalToSky25: true,
+  vocalToSky25: false,
   melodyMode: "auto",
   arrangementMode: "polyphonic",
   maxSimultaneous: 4,
@@ -253,6 +261,52 @@ export const useStore = create<Store>((set, get) => ({
       tracks: tracks.map((t, i) => (i === trackIndex ? { ...target, notes } : t)),
     };
     set({ scores: { ...scores, [stem]: { score: nextScore, meta: entry.meta } } });
+  },
+
+  updateScoreMeta: (stem, scoreMeta, metaPatch = {}) => {
+    const { scores } = get();
+    const entry = scores[stem];
+    if (!entry) return;
+    const nextScore: CubyScore = {
+      ...entry.score,
+      meta: {
+        ...entry.score.meta,
+        ...scoreMeta,
+      },
+    };
+    set({
+      scores: {
+        ...scores,
+        [stem]: {
+          score: nextScore,
+          meta: {
+            ...entry.meta,
+            ...metaPatch,
+          },
+        },
+      },
+    });
+  },
+
+  replaceScore: (stem, score, metaPatch = {}) => {
+    const { scores } = get();
+    const entry = scores[stem];
+    if (!entry) return;
+    const noteCount = score.tracks.reduce((sum, track) => sum + (track.notes?.length ?? 0), 0);
+    set({
+      scores: {
+        ...scores,
+        [stem]: {
+          score,
+          meta: {
+            ...entry.meta,
+            bpm: score.meta.bpm,
+            noteCount,
+            ...metaPatch,
+          },
+        },
+      },
+    });
   },
 
   reset: () => {

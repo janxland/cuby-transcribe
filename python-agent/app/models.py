@@ -25,8 +25,8 @@ class ProcessOptions(BaseModel):
     separationQuality: Literal["fast", "high"] = "high"
     # 要扒哪条音轨；为 None 时根据 separationMode 自动决定
     transcribeStem: Optional[TranscribeStem] = None
-    # 纯人声扒谱时，自动转到 25 键可演奏范围（保留半音，不裁掉细节）
-    vocalToSky25: bool = True
+    # 第二阶段演奏适配开关：默认关闭，避免 raw 原始扒谱阶段改写人声音高
+    vocalToSky25: bool = False
     # 用户实际想要保留的 stems 名单；为 None 时保留全部 demucs 输出
     stems: Optional[List[str]] = None
 
@@ -147,4 +147,35 @@ class ProcessResponse(BaseModel):
     metadata: Optional[Metadata] = None
     stems: List[StemInfo] = Field(default_factory=list)
     taskId: Optional[str] = None
+    error: Optional[str] = None
+
+
+class ScoreCleanupOptions(BaseModel):
+    # auto 默认走 Python 内置 local_ai；也可显式接本机 AnthemScore CLI / 私有 MIDI Cleaner AI。
+    provider: Literal["auto", "local_ai", "anthem_score", "midi_cleaner_ai"] = "auto"
+    # 允许的轻量预清理：只移除短于 1/32 的明显碎音，避免把外部 AI 额度浪费在毛刺上。
+    removeOneThirtySecondNoise: bool = True
+    minDivision: Literal[32] = 32
+    targetBpm: Optional[float] = None
+    # 给外部 AI 的意图提示；具体是否生效取决于 provider。
+    preserveMelody: bool = True
+
+
+class ScoreCleanupRequest(BaseModel):
+    score: CubyScore
+    options: ScoreCleanupOptions = Field(default_factory=ScoreCleanupOptions)
+
+
+class ScoreCleanupStats(BaseModel):
+    before: int
+    after: int
+    removedOneThirtySecond: int = 0
+    provider: str
+    message: str = ""
+
+
+class ScoreCleanupResponse(BaseModel):
+    success: bool
+    cubyScore: Optional[CubyScore] = None
+    stats: Optional[ScoreCleanupStats] = None
     error: Optional[str] = None

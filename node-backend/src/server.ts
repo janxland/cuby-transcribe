@@ -20,6 +20,26 @@ await app.register(multipart, { limits: { fileSize: MAX_FILE_SIZE } });
 
 app.get("/health", async () => ({ status: "ok", service: "node-backend" }));
 
+app.post("/api/score/cleanup", async (req, reply) => {
+  const body = (req.body ?? {}) as { score?: unknown; options?: unknown };
+  if (!body.score) {
+    return reply.code(400).send({ error: "missing score" });
+  }
+
+  const r = await fetch(`${PYTHON_AGENT_URL}/internal/score/cleanup`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    return reply.code(r.status).send({
+      error: data?.detail || data?.error || "score cleanup failed",
+    });
+  }
+  return data;
+});
+
 app.post("/api/transcribe", async (req, reply) => {
   const parts = req.parts();
   let savedPath: string | null = null;

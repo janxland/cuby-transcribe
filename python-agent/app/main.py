@@ -4,8 +4,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from loguru import logger
 
-from .models import ProcessRequest, ProcessResponse
+from .models import ProcessRequest, ProcessResponse, ScoreCleanupRequest, ScoreCleanupResponse
 from .pipeline import processor
+from .pipeline.ai_midi_cleaner import cleanup_score
 
 app = FastAPI(title="Cuby Transcribe Agent", version="0.2.0")
 
@@ -29,6 +30,16 @@ def process(req: ProcessRequest):
         return ProcessResponse(success=True, **result)
     except Exception as e:
         logger.exception("process failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/internal/score/cleanup", response_model=ScoreCleanupResponse)
+def cleanup(req: ScoreCleanupRequest):
+    try:
+        score, stats = cleanup_score(req.score, req.options)
+        return ScoreCleanupResponse(success=True, cubyScore=score, stats=stats)
+    except Exception as e:
+        logger.exception("score cleanup failed")
         raise HTTPException(status_code=500, detail=str(e))
 
 
