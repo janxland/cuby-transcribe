@@ -20,6 +20,37 @@ is_running() {
   kill -0 "$pid" >/dev/null 2>&1
 }
 
+kill_port_listener() {
+  local port="$1"
+  local pids
+  pids="$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+
+  if [[ -z "${pids//[[:space:]]/}" ]]; then
+    return 0
+  fi
+
+  echo "[cleanup] port :$port is occupied, stopping stale listener(s): $pids"
+  while IFS= read -r pid; do
+    [[ -z "$pid" ]] && continue
+    kill "$pid" >/dev/null 2>&1 || true
+  done <<< "$pids"
+
+  for _ in {1..20}; do
+    if ! lsof -tiTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.2
+  done
+
+  # 若仍占用则强杀，避免 start-all 误判“已启动”但实际服务起不来
+  pids="$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+  while IFS= read -r pid; do
+    [[ -z "$pid" ]] && continue
+    echo "[cleanup] force killing stale listener pid=$pid on :$port"
+    kill -9 "$pid" >/dev/null 2>&1 || true
+  done <<< "$pids"
+}
+
 check_service_not_running() {
   local name="$1"
   local pid_file="$PID_DIR/$name.pid"
@@ -100,7 +131,8 @@ start_node_backend() {
   echo "[2/3] starting $name on :3000"
   (
     cd "$service_dir"
-    exec npm run dev
+    # 断开 stdin，避免 dev server 在后台读取 TTY 时报 read EIO 退出。
+    exec npm run dev </dev/null
   ) >"$log_file" 2>&1 &
 
   echo "$!" > "$pid_file"
@@ -115,7 +147,8 @@ start_web_frontend() {
   echo "[3/3] starting $name on :5173"
   (
     cd "$service_dir"
-    exec npm run dev
+    # 断开 stdin，避免 dev server 在后台读取 TTY 时报 read EIO 退出。
+    exec npm run dev </dev/null
   ) >"$log_file" 2>&1 &
 
   echo "$!" > "$pid_file"
@@ -143,6 +176,11 @@ main() {
   check_service_not_running "python-agent"
   check_service_not_running "node-backend"
   check_service_not_running "web"
+
+  # PID 文件可能失效（例如父进程异常退出），这里按端口做兜底清理。
+  kill_port_listener 8000
+  kill_port_listener 3000
+  kill_port_listener 5173
 
   bootstrap_python
   bootstrap_node "$ROOT_DIR/node-backend"

@@ -20,7 +20,10 @@ class ProcessOptions(BaseModel):
     simplifyMelody: bool = True
 
     # 音轨分离（Demucs）
-    separationMode: SeparationMode = "none"
+    # raw 高保真模式默认 6stems：vocals/drums/bass/other/piano/guitar 分轨各自转录，
+    # 保证第一阶段每条轨道独立、无互相污染。
+    separationMode: SeparationMode = "6stems"
+    # separationMode: SeparationMode = "none"
     # 分离质量：fast=更快；high=更稳（更高 overlap + shifts）
     separationQuality: Literal["fast", "high"] = "high"
     # 要扒哪条音轨；为 None 时根据 separationMode 自动决定

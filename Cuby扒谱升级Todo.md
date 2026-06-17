@@ -35,15 +35,14 @@
 - [ ] **检查 raw 伴奏轨是否需要“零过滤”开关**
   - 当前 raw Basic Pitch 仍会丢弃 `<25ms 且极弱`、`velocity < 8` 的毛刺
   - 如果目标是绝对保真，可增加 `strictRaw=true` 时完全保留 Basic Pitch 输出
-- [ ] **检查 raw 阶段是否应禁止自动左右手拆轨**
-  - 当前 `split_two_hand_tracks()` 可能把 `no_vocals/original` 拆为 `Piano RH/LH`
-  - 它不改音符，但会改变第一阶段 track 结构；可考虑做成第二阶段操作
+- [x] **检查 raw 阶段是否应禁止自动左右手拆轨**
+  - 已移除 `_run_raw` 中两处 `split_two_hand_tracks()` 调用，第一阶段完全保持原始 stem track 结构
 
 ---
 
 ## 🟠 P1 — 安装新依赖，精度再提升 30%+（预计 1-2 天）
 
-- [ ] **`pip install torchcrepe`** — 替代 PYIN 作为默认 F0 后端
+- [x] **`pip install torchcrepe`** — 替代 PYIN 作为默认 F0 后端
   - 精度从 RPA ~85% 提升至 ~93%，内置 Viterbi 解码
 - [ ] **`pip install allin1`** — 一次推理全出音乐分析结果
   - 输出：beat / downbeat / chord / key / section

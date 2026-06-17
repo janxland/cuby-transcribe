@@ -17,3 +17,7 @@ torchaudio>=2.1
 diffq>=0.2.4
 imageio-ffmpeg>=0.5.1
 
+# 人声 F0 高精度后端（CREPE, RPA ~93% vs PYIN ~85%）
+# raw 高保真模式 separationQuality="high" 时自动启用；缺失时 fallback 到 PYIN
+torchcrepe>=0.0.20
+

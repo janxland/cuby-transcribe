@@ -5,6 +5,7 @@ import { ProgressCard } from "./components/ProgressCard";
 import { AudioPlayer } from "./components/AudioPlayer";
 import { ScoreViewer } from "./components/ScoreViewer";
 import { HeaderControls } from "./components/HeaderControls";
+import { HumTranscribePanel } from "./components/recorder";
 import { useStore } from "@/store";
 import { setSynthVolume } from "@/components/synth";
 
@@ -33,6 +34,9 @@ export default function App() {
       {/* 主体：左侧边栏 + 右编辑区，共同占满剩余视口 */}
       <main className="flex-1 flex overflow-hidden">
         <aside className="w-[340px] shrink-0 border-r border-slate-800 bg-slate-950/40 overflow-y-auto p-4 space-y-4">
+          <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+            <HumTranscribePanel />
+          </section>
           <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
             <h2 className="text-xs font-medium text-slate-300 mb-3 uppercase tracking-wider">上传音频</h2>
             <Uploader />

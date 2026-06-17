@@ -1,8 +1,11 @@
 """完整流水线：音频 → (可选分离) → CubyScore。"""
 from __future__ import annotations
 import os
+import shutil
+import subprocess
 import time
 import uuid
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Optional
 from loguru import logger
@@ -27,6 +30,69 @@ MELODY_VELOCITY_FLOOR = 75
 
 STEMS_ROOT = os.environ.get("STEMS_DIR", "/tmp/cuby-stems")
 os.makedirs(STEMS_ROOT, exist_ok=True)
+
+
+def _build_audio_decode_env() -> tuple[dict[str, str], str | None]:
+    """Provide an ffmpeg binary even when the host machine does not have one installed."""
+    env = dict(os.environ)
+    system_ffmpeg = shutil.which("ffmpeg")
+    if system_ffmpeg:
+        return env, system_ffmpeg
+
+    try:
+        import imageio_ffmpeg  # type: ignore
+
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        ffmpeg_path = Path(ffmpeg_exe).resolve()
+        shim_dir = Path("/tmp/cuby-ffmpeg-shim")
+        shim_dir.mkdir(parents=True, exist_ok=True)
+        shim = shim_dir / "ffmpeg"
+        shim_text = f"#!/usr/bin/env bash\nexec \"{ffmpeg_path}\" \"$@\"\n"
+        if (not shim.exists()) or (shim.read_text(encoding="utf-8", errors="ignore") != shim_text):
+            shim.write_text(shim_text, encoding="utf-8")
+            shim.chmod(0o755)
+        env["PATH"] = str(shim_dir) + os.pathsep + env.get("PATH", "")
+        env["FFMPEG_BINARY"] = str(shim)
+        env["IMAGEIO_FFMPEG_EXE"] = str(ffmpeg_path)
+        return env, str(shim)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[audio] ffmpeg unavailable: {e}")
+        return env, None
+
+
+def _normalize_audio_input(audio_path: str, task_id: str) -> str:
+    """Convert browser-recorded containers like webm/ogg/mp4 into wav for downstream libraries."""
+    src = Path(audio_path)
+    if src.suffix.lower() in {".wav", ".mp3", ".flac"}:
+        return str(src)
+
+    env, ffmpeg_bin = _build_audio_decode_env()
+    if not ffmpeg_bin:
+        return str(src)
+
+    out_dir = Path(STEMS_ROOT) / task_id / "_prepared"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_wav = out_dir / f"{src.stem}.wav"
+    cmd = [
+        ffmpeg_bin,
+        "-y",
+        "-i", str(src),
+        "-vn",
+        "-ac", "1",
+        "-ar", "22050",
+        "-f", "wav",
+        str(out_wav),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    if proc.returncode != 0 or not out_wav.exists():
+        err_tail = (proc.stderr or "")[-1200:]
+        logger.warning(f"[audio] pre-convert failed, fallback original: {src}")
+        if err_tail:
+            logger.warning(err_tail)
+        return str(src)
+
+    logger.info(f"[audio] normalized: {src} -> {out_wav}")
+    return str(out_wav)
 
 
 def _duration(path: str) -> float:
@@ -112,6 +178,7 @@ def run(audio_path: str, options: ProcessOptions, task_id: str | None = None) ->
         raise FileNotFoundError(audio_path)
 
     task_id = task_id or uuid.uuid4().hex[:8]
+    audio_path = _normalize_audio_input(audio_path, task_id)
     stems_dir = os.path.join(STEMS_ROOT, task_id)
     stems: list[StemInfo] = []
 
@@ -424,7 +491,7 @@ def _run_raw(
             vocal_merge_gap_sec=vocal_merge_gap_sec,
             vocal_voiced_thresh=vocal_voiced_thresh,
         )
-        tracks_data, algos = raw_transcriber.split_two_hand_tracks(tracks_data, algos)
+        # 左右手拆轨属于第二阶段编配操作，第一阶段保持原始 stem 轨道结构不变
         if not tracks_data:
             # 所有 stem 都失败 → 退回整曲转录
             logger.warning("[raw] all stems empty, fall back to full mix")
@@ -446,7 +513,7 @@ def _run_raw(
             "notes": [raw_transcriber._to_score_note(n) for n in full_notes],
         }]
         algos = {"original": "basic_pitch"}
-        tracks_data, algos = raw_transcriber.split_two_hand_tracks(tracks_data, algos)
+        # 左右手拆轨属于第二阶段编配操作，第一阶段保持原始轨道结构不变
 
     # —— 4.5 人声目标可演奏化：转到 25 键范围（默认开启）——
     if options.vocalToSky25 and options.transcribeStem == "vocals":
